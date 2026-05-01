@@ -1,0 +1,51 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.0.0
+MinimumVisualStudioVersion = 10.0.40219.1
+
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EasyAzure.Api", "src\EasyAzure.Api\EasyAzure.Api.csproj", "{11111111-0000-0000-0000-000000000001}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EasyAzure.Core", "src\EasyAzure.Core\EasyAzure.Core.csproj", "{11111111-0000-0000-0000-000000000002}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EasyAzure.Discovery", "src\EasyAzure.Discovery\EasyAzure.Discovery.csproj", "{11111111-0000-0000-0000-000000000003}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EasyAzure.Topology", "src\EasyAzure.Topology\EasyAzure.Topology.csproj", "{11111111-0000-0000-0000-000000000004}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EasyAzure.DataPath", "src\EasyAzure.DataPath\EasyAzure.DataPath.csproj", "{11111111-0000-0000-0000-000000000005}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EasyAzure.Designer", "src\EasyAzure.Designer\EasyAzure.Designer.csproj", "{11111111-0000-0000-0000-000000000006}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EasyAzure.IaC", "src\EasyAzure.IaC\EasyAzure.IaC.csproj", "{11111111-0000-0000-0000-000000000007}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EasyAzure.Discovery.Tests", "tests\EasyAzure.Discovery.Tests\EasyAzure.Discovery.Tests.csproj", "{11111111-0000-0000-0000-000000000008}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EasyAzure.DataPath.Tests", "tests\EasyAzure.DataPath.Tests\EasyAzure.DataPath.Tests.csproj", "{11111111-0000-0000-0000-000000000009}"
+EndProject
+
+Global
+  GlobalSection(SolutionConfigurationPlatforms) = preSolution
+    Debug|Any CPU = Debug|Any CPU
+    Release|Any CPU = Release|Any CPU
+  EndGlobalSection
+  GlobalSection(ProjectConfigurationPlatforms) = postSolution
+    {11111111-0000-0000-0000-000000000001}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {11111111-0000-0000-0000-000000000001}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {11111111-0000-0000-0000-000000000002}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {11111111-0000-0000-0000-000000000002}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {11111111-0000-0000-0000-000000000003}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {11111111-0000-0000-0000-000000000003}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {11111111-0000-0000-0000-000000000004}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {11111111-0000-0000-0000-000000000004}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {11111111-0000-0000-0000-000000000005}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {11111111-0000-0000-0000-000000000005}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {11111111-0000-0000-0000-000000000006}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {11111111-0000-0000-0000-000000000006}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {11111111-0000-0000-0000-000000000007}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {11111111-0000-0000-0000-000000000007}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {11111111-0000-0000-0000-000000000008}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {11111111-0000-0000-0000-000000000008}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {11111111-0000-0000-0000-000000000009}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {11111111-0000-0000-0000-000000000009}.Release|Any CPU.ActiveCfg = Release|Any CPU
+  EndGlobalSection
+EndGlobal

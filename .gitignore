@@ -1,0 +1,46 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+.vite/
+*.local
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+publish/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Secrets — never commit real secrets
+appsettings.Local.json
+appsettings.*.local.json
+local.settings.json
+*.pfx
+*.key
+
+# Bicep / ARM — generated files only, not authored
+infra/*.json
+!infra/bicepconfig.json
+
+# Docker
+.docker/
+
+# Coverage
+coverage/
+*.lcov
+
+# IDE
+.idea/
+*.swp

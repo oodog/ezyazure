@@ -1,0 +1,128 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/backend/**'
+      - 'src/workers/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/backend/**'
+      - 'src/workers/**'
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore src/backend/EasyAzure.sln
+
+      - name: Build
+        run: dotnet build src/backend/EasyAzure.sln --no-restore --configuration Release
+
+      - name: Run tests
+        run: >
+          dotnet test src/backend/EasyAzure.sln
+          --no-build
+          --configuration Release
+          --logger "trx;LogFileName=results.trx"
+          --collect "XPlat Code Coverage"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: '**/TestResults/**/*.trx'
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: '**/TestResults/**/coverage.cobertura.xml'
+
+  docker-build-api:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push API image
+        run: |
+          ACR_NAME="${{ secrets.ACR_NAME }}"
+          IMAGE_TAG="${{ github.sha }}"
+          az acr build \
+            --registry $ACR_NAME \
+            --image easyazure-api:$IMAGE_TAG \
+            --image easyazure-api:latest \
+            --file src/backend/src/EasyAzure.Api/Dockerfile \
+            src/backend
+
+  docker-build-workers:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push discovery worker image
+        run: |
+          ACR_NAME="${{ secrets.ACR_NAME }}"
+          IMAGE_TAG="${{ github.sha }}"
+          az acr build \
+            --registry $ACR_NAME \
+            --image easyazure-discovery-worker:$IMAGE_TAG \
+            --image easyazure-discovery-worker:latest \
+            --file src/workers/EasyAzure.DiscoveryWorker/Dockerfile \
+            src
+
+  deploy-staging:
+    needs: [docker-build-api, docker-build-workers]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Update Container App revision (staging)
+        run: |
+          az containerapp update \
+            --name easyazure-api-staging \
+            --resource-group ${{ secrets.AZURE_RG_STAGING }} \
+            --image ${{ secrets.ACR_NAME }}.azurecr.io/easyazure-api:${{ github.sha }}

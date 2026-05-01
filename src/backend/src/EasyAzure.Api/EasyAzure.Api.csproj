@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>EasyAzure.Api</RootNamespace>
+    <AssemblyName>EasyAzure.Api</AssemblyName>
+    <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.*" />
+    <PackageReference Include="Microsoft.Identity.Web" Version="2.18.*" />
+    <PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" Version="2.22.*" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.9.*" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EasyAzure.Core\EasyAzure.Core.csproj" />
+    <ProjectReference Include="..\EasyAzure.Discovery\EasyAzure.Discovery.csproj" />
+    <ProjectReference Include="..\EasyAzure.Topology\EasyAzure.Topology.csproj" />
+    <ProjectReference Include="..\EasyAzure.DataPath\EasyAzure.DataPath.csproj" />
+    <ProjectReference Include="..\EasyAzure.Designer\EasyAzure.Designer.csproj" />
+    <ProjectReference Include="..\EasyAzure.IaC\EasyAzure.IaC.csproj" />
+  </ItemGroup>
+</Project>

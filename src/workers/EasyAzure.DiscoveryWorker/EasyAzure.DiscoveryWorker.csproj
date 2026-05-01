@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Azure.Identity" Version="1.13.*" />
+    <PackageReference Include="Azure.ResourceManager" Version="1.13.*" />
+    <PackageReference Include="Azure.ResourceManager.Network" Version="1.9.*" />
+    <PackageReference Include="Azure.ResourceManager.Compute" Version="1.6.*" />
+    <PackageReference Include="Azure.ResourceManager.Resources" Version="1.7.*" />
+    <PackageReference Include="Microsoft.Azure.Management.ResourceGraph" Version="2.0.*" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.*" />
+    <PackageReference Include="Microsoft.ApplicationInsights.WorkerService" Version="2.22.*" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\backend\src\EasyAzure.Core\EasyAzure.Core.csproj" />
+    <ProjectReference Include="..\..\backend\src\EasyAzure.Discovery\EasyAzure.Discovery.csproj" />
+    <ProjectReference Include="..\..\backend\src\EasyAzure.Topology\EasyAzure.Topology.csproj" />
+  </ItemGroup>
+</Project>

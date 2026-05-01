@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Azure.Identity" Version="1.14.*" />
+    <PackageReference Include="Azure.ResourceManager" Version="1.14.*" />
+    <PackageReference Include="Azure.ResourceManager.Network" Version="1.9.*" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\EasyAzure.Core\EasyAzure.Core.csproj" />
+    <ProjectReference Include="..\EasyAzure.Topology\EasyAzure.Topology.csproj" />
+  </ItemGroup>
+</Project>
