@@ -1,0 +1,57 @@
+{
+  "api": {
+    "requestedAccessTokenVersion": 2,
+    "oauth2PermissionScopes": [
+      {
+        "id": "11111111-2222-3333-4444-555555555555",
+        "adminConsentDescription": "Allow the application to access the EasyAzure API on behalf of the signed-in user.",
+        "adminConsentDisplayName": "Access EasyAzure API",
+        "userConsentDescription": "Allow the application to access the EasyAzure API on your behalf.",
+        "userConsentDisplayName": "Access EasyAzure API",
+        "value": "access_as_user",
+        "type": "User",
+        "isEnabled": true
+      }
+    ],
+    "preAuthorizedApplications": [
+      {
+        "appId": "a710ac64-72a5-4398-8e90-24466ef9534f",
+        "delegatedPermissionIds": [ "11111111-2222-3333-4444-555555555555" ]
+      }
+    ]
+  },
+  "appRoles": [
+    {
+      "id": "21111111-2222-3333-4444-555555555551",
+      "allowedMemberTypes": [ "User" ],
+      "displayName": "Reader",
+      "description": "Read-only access to EasyAzure (discovery, dashboard, validation).",
+      "value": "Reader",
+      "isEnabled": true
+    },
+    {
+      "id": "21111111-2222-3333-4444-555555555552",
+      "allowedMemberTypes": [ "User" ],
+      "displayName": "Designer",
+      "description": "Reader plus design environment + run validations + generate Bicep.",
+      "value": "Designer",
+      "isEnabled": true
+    },
+    {
+      "id": "21111111-2222-3333-4444-555555555553",
+      "allowedMemberTypes": [ "User" ],
+      "displayName": "Operator",
+      "description": "Designer plus run what-if and deployments.",
+      "value": "Operator",
+      "isEnabled": true
+    },
+    {
+      "id": "21111111-2222-3333-4444-555555555554",
+      "allowedMemberTypes": [ "User" ],
+      "displayName": "Admin",
+      "description": "Full access including configuration changes.",
+      "value": "Admin",
+      "isEnabled": true
+    }
+  ]
+}

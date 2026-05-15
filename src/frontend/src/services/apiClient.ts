@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { msalInstance } from '@/auth/authConfig'
+import { easyAzureApiScopes, msalInstance } from '@/auth/authConfig'
 
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api',
@@ -11,7 +11,7 @@ apiClient.interceptors.request.use(async (config) => {
     const account = msalInstance.getActiveAccount() ?? msalInstance.getAllAccounts()[0]
     if (account) {
       const response = await msalInstance.acquireTokenSilent({
-        scopes: ['https://management.azure.com/user_impersonation'],
+        scopes: easyAzureApiScopes.scopes,
         account,
       })
       config.headers.Authorization = `Bearer ${response.accessToken}`

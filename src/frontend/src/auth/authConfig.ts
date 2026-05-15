@@ -32,6 +32,17 @@ export const loginRequest = {
   ],
 }
 
+/**
+ * Scopes used to call the EasyAzure API. The scope identifier is
+ * `api://<api-client-id>/access_as_user`, defined on the Entra app registration.
+ * See: https://learn.microsoft.com/entra/identity-platform/scopes-oidc
+ */
+export const easyAzureApiScopes = {
+  scopes: [
+    `api://${import.meta.env.VITE_AZURE_CLIENT_ID}/access_as_user`,
+  ],
+}
+
 export const azureManagementScopes = {
   scopes: ['https://management.azure.com/.default'],
 }
