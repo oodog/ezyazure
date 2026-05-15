@@ -24,19 +24,29 @@ public class TopologyService : ITopologyService
     public async Task<TopologyGraph> BuildTopologyAsync(string subscriptionId, CancellationToken ct = default)
     {
         _logger.LogInformation("Building topology graph for {SubscriptionId}", subscriptionId);
+        return await BuildTopologyMultiAsync([subscriptionId], ct);
+    }
 
-        var vnets = await _resourceGraph.GetVNetsAsync(subscriptionId, ct);
-        var nsgs = await _resourceGraph.GetNSGsAsync(subscriptionId, ct);
-        var routeTables = await _resourceGraph.GetRouteTablesAsync(subscriptionId, ct);
-        var vms = await _resourceGraph.GetVMsAsync(subscriptionId, ct);
-        var privateEndpoints = await _resourceGraph.GetPrivateEndpointsAsync(subscriptionId, ct);
+    public async Task<TopologyGraph> BuildTopologyMultiAsync(IReadOnlyList<string> subscriptionIds, CancellationToken ct = default)
+    {
+        _logger.LogInformation(
+            "Building topology graph across {Count} subscription(s): {Subs}",
+            subscriptionIds.Count, string.Join(", ", subscriptionIds));
 
-        var allResources = vnets
-            .Concat(nsgs)
-            .Concat(routeTables)
-            .Concat(vms)
-            .Concat(privateEndpoints)
-            .ToList();
+        var allResources = new List<AzureResource>();
+        foreach (var subscriptionId in subscriptionIds)
+        {
+            var vnets = await _resourceGraph.GetVNetsAsync(subscriptionId, ct);
+            var nsgs = await _resourceGraph.GetNSGsAsync(subscriptionId, ct);
+            var routeTables = await _resourceGraph.GetRouteTablesAsync(subscriptionId, ct);
+            var vms = await _resourceGraph.GetVMsAsync(subscriptionId, ct);
+            var privateEndpoints = await _resourceGraph.GetPrivateEndpointsAsync(subscriptionId, ct);
+            allResources.AddRange(vnets);
+            allResources.AddRange(nsgs);
+            allResources.AddRange(routeTables);
+            allResources.AddRange(vms);
+            allResources.AddRange(privateEndpoints);
+        }
 
         var nodes = BuildNodes(allResources);
         var edges = BuildEdges(allResources);

@@ -31,4 +31,22 @@ public class BestPracticeController : ControllerBase
         var rules = await _engine.ListRulesAsync(ct);
         return Ok(rules);
     }
+
+    /// <summary>
+    /// Validates a designer canvas against Microsoft best practice. Combines deterministic
+    /// rule checks with an optional Azure OpenAI review (when configured). Every finding
+    /// returned cites a Microsoft Learn URL only.
+    /// </summary>
+    [HttpPost("validate-design")]
+    [Authorize(Policy = "Designer")]
+    public async Task<ActionResult<DesignValidationReport>> ValidateDesign(
+        [FromBody] DesignValidationRequest request, CancellationToken ct)
+    {
+        if (request is null || request.Nodes is null || request.Nodes.Count == 0)
+        {
+            return BadRequest(new { error = "Design must contain at least one node." });
+        }
+        var report = await _engine.ValidateDesignAsync(request, ct);
+        return Ok(report);
+    }
 }

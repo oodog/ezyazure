@@ -29,6 +29,12 @@ builder.Services.AddScoped<IDesignerService, DesignerService>();
 builder.Services.AddScoped<IBestPracticeEngine, BestPracticeEngine>();
 builder.Services.AddScoped<IBicepGeneratorService, BicepGeneratorService>();
 builder.Services.AddScoped<IDeploymentService, DeploymentService>();
+builder.Services.AddScoped<IReplicationService, ReplicationService>();
+
+// HttpClientFactory is required by BestPracticeEngine to call Azure OpenAI for
+// AI-augmented design validation. See:
+// https://learn.microsoft.com/aspnet/core/fundamentals/http-requests
+builder.Services.AddHttpClient();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();

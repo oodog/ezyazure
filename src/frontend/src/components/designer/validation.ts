@@ -16,6 +16,10 @@ export interface ValidationFinding {
   message: string
   nodeId?: string
   reference?: string
+  /** Indicates whether the finding came from a local rule or AI augmentation. */
+  source?: 'rule' | 'ai'
+  /** When true, deployment is blocked until the user explicitly acknowledges the deviation. */
+  requiresAcknowledgement?: boolean
 }
 
 type DesignNode = Node<DesignBlock>

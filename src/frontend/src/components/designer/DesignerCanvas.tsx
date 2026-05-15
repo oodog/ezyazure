@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import ReactFlow, {
   Background,
   BackgroundVariant,
@@ -23,6 +23,7 @@ import AzureContainerNode from './AzureContainerNode'
 import { getBlockMeta, categoryStyles } from './blockMetadata'
 import { validateDesign, type ValidationFinding } from './validation'
 import { canConnect, canContain, isContainer, containerSize } from './relationships'
+import { bestPracticeService, type DesignFinding } from '@/services/bestPracticeService'
 import type { DesignBlock } from '@/types/designer'
 
 interface EdgeData {
@@ -51,6 +52,11 @@ function CanvasInner() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [findings, setFindings] = useState<ValidationFinding[] | null>(null)
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const [aiUsed, setAiUsed] = useState(false)
+  const [aiModel, setAiModel] = useState<string | null>(null)
+  const [acknowledged, setAcknowledged] = useState<Set<string>>(new Set())
   const [toast, setToast] = useState<{ kind: 'error' | 'info'; msg: string } | null>(null)
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, getIntersectingNodes } = useReactFlow()
@@ -232,12 +238,95 @@ function CanvasInner() {
       setSelectedNodeId(null)
       setSelectedEdgeId(null)
       setFindings(null)
+      setAcknowledged(new Set())
+      setAiUsed(false)
+      setAiModel(null)
+      setAiError(null)
     }
   }
 
+  /** Convert a server DesignFinding into the UI ValidationFinding shape. */
+  const mapServerFinding = (f: DesignFinding): ValidationFinding => ({
+    severity: f.severity,
+    ruleId: f.ruleId,
+    message: f.message,
+    nodeId: f.nodeId ?? undefined,
+    reference: f.reference ?? undefined,
+    source: f.source,
+    requiresAcknowledgement: f.requiresAcknowledgement,
+  })
+
+  /** Local, fast, deterministic validation. */
   const runValidation = () => {
-    setFindings(validateDesign(nodes, edges))
+    const local = validateDesign(nodes, edges).map((f) => ({
+      ...f,
+      source: 'rule' as const,
+      requiresAcknowledgement: f.requiresAcknowledgement ?? f.severity !== 'info',
+    }))
+    setFindings(local)
+    setAiUsed(false)
+    setAiModel(null)
+    setAiError(null)
   }
+
+  /**
+   * AI-augmented validation. Calls the backend `/api/bestpractice/validate-design`
+   * which combines deterministic rules with an Azure OpenAI review. Findings can come
+   * from either source; AI findings are constrained to cite Microsoft Learn URLs.
+   */
+  const runAiValidation = async () => {
+    if (nodes.length === 0) {
+      showToast('error', 'Add at least one block before validating.')
+      return
+    }
+    setAiBusy(true)
+    setAiError(null)
+    try {
+      const report = await bestPracticeService.validateDesign(nodes, edges, true)
+      setFindings(report.findings.map(mapServerFinding))
+      setAiUsed(report.aiUsed)
+      setAiModel(report.aiModel ?? null)
+      if (!report.aiUsed) {
+        showToast('info', 'Azure OpenAI not configured on the server — showing rule-based findings only.')
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'AI validation failed.'
+      setAiError(msg)
+      showToast('error', msg)
+    } finally {
+      setAiBusy(false)
+    }
+  }
+
+  const toggleAck = (key: string) => {
+    setAcknowledged((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  /** Stable key for a finding's acknowledgement state. */
+  const ackKey = (f: ValidationFinding, idx: number) =>
+    `${f.ruleId}::${f.nodeId ?? 'global'}::${idx}`
+
+  /**
+   * Compute deployment-readiness. Deployment is blocked when any error remains, or any
+   * warning that the engine flagged as requiring acknowledgement has NOT yet been
+   * acknowledged by the user.
+   */
+  const deployGate = useMemo(() => {
+    if (!findings) return { blocked: false, errors: 0, pendingAck: 0 }
+    const errors = findings.filter((f) => f.severity === 'error').length
+    let pendingAck = 0
+    findings.forEach((f, i) => {
+      if (f.requiresAcknowledgement && !acknowledged.has(ackKey(f, i))) {
+        pendingAck += 1
+      }
+    })
+    return { blocked: errors > 0 || pendingAck > 0, errors, pendingAck }
+  }, [findings, acknowledged])
 
   return (
     <div className="flex h-full gap-3 relative">
@@ -281,12 +370,38 @@ function CanvasInner() {
               Validate
             </button>
 
-            <button className="flex items-center gap-1.5 text-xs font-semibold text-white bg-azure-500 hover:bg-azure-600 px-3 py-1.5 rounded-lg transition-colors shadow-sm">
+            <button
+              onClick={runAiValidation}
+              disabled={aiBusy || nodes.length === 0}
+              title="Run an AI best-practice review backed by Microsoft Learn citations."
+              className="flex items-center gap-1.5 text-xs text-violet-700 hover:text-violet-900 bg-violet-50 hover:bg-violet-100 disabled:opacity-50 px-3 py-1.5 rounded-lg border border-violet-200 transition-all"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+              {aiBusy ? 'AI reviewing…' : 'AI Validate'}
+            </button>
+
+            <button
+              disabled={deployGate.blocked}
+              title={
+                deployGate.blocked
+                  ? `Resolve ${deployGate.errors} error(s) and acknowledge ${deployGate.pendingAck} non-best-practice item(s) before generating Bicep.`
+                  : 'Generate Bicep IaC for this design.'
+              }
+              className="flex items-center gap-1.5 text-xs font-semibold text-white bg-azure-500 hover:bg-azure-600 disabled:bg-gray-300 disabled:cursor-not-allowed px-3 py-1.5 rounded-lg transition-colors shadow-sm"
+            >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                   d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
               </svg>
               Generate Bicep
+              {deployGate.blocked && (
+                <span className="ml-1 text-[10px] bg-white/20 rounded px-1">
+                  {deployGate.errors > 0 ? `${deployGate.errors} err` : `${deployGate.pendingAck} ack`}
+                </span>
+              )}
             </button>
           </div>
         </div>
@@ -363,40 +478,108 @@ function CanvasInner() {
                   {findings.filter((f) => f.severity === 'warning').length} warnings,{' '}
                   {findings.filter((f) => f.severity === 'info').length} info
                 </span>
+                {aiUsed && (
+                  <span className="text-[10px] uppercase tracking-wide font-semibold bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded">
+                    AI {aiModel ? `· ${aiModel}` : ''}
+                  </span>
+                )}
+                {deployGate.pendingAck > 0 && (
+                  <span className="text-[10px] uppercase tracking-wide font-semibold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                    {deployGate.pendingAck} pending ack
+                  </span>
+                )}
               </div>
               <button onClick={() => setFindings(null)}
                 className="text-gray-400 hover:text-gray-700 text-xs">
                 Dismiss
               </button>
             </div>
+            {aiError && (
+              <div className="px-4 py-2 bg-red-50 border-b border-red-100 text-xs text-red-700">
+                {aiError}
+              </div>
+            )}
             {findings.length === 0 ? (
               <div className="px-4 py-6 text-center">
-                <p className="text-sm font-semibold text-emerald-600">No issues — design follows Microsoft best practices.</p>
+                <p className="text-sm font-semibold text-emerald-600">
+                  No issues — design follows Microsoft best practices.
+                </p>
               </div>
             ) : (
-              <ul className="max-h-56 overflow-y-auto divide-y divide-gray-100">
-                {findings.map((f, i) => (
-                  <li key={i} className="px-4 py-2.5 flex items-start gap-3 hover:bg-gray-50 cursor-pointer"
-                    onClick={() => f.nodeId && setSelectedNodeId(f.nodeId)}>
-                    <span className={`mt-0.5 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full flex-shrink-0 ${
-                      f.severity === 'error' ? 'bg-red-100 text-red-700'
-                      : f.severity === 'warning' ? 'bg-amber-100 text-amber-700'
-                      : 'bg-blue-100 text-blue-700'
-                    }`}>{f.severity}</span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs text-gray-700">{f.message}</p>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <code className="text-[10px] text-gray-400">{f.ruleId}</code>
-                        {f.reference && (
-                          <a href={f.reference} target="_blank" rel="noopener noreferrer"
-                            className="text-[10px] text-azure-500 hover:underline" onClick={(e) => e.stopPropagation()}>
-                            docs ↗
-                          </a>
-                        )}
+              <ul className="max-h-72 overflow-y-auto divide-y divide-gray-100">
+                {findings.map((f, i) => {
+                  const key = ackKey(f, i)
+                  const isAcked = acknowledged.has(key)
+                  return (
+                    <li
+                      key={key}
+                      className="px-4 py-2.5 flex items-start gap-3 hover:bg-gray-50"
+                    >
+                      <span
+                        className={`mt-0.5 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full flex-shrink-0 ${
+                          f.severity === 'error'
+                            ? 'bg-red-100 text-red-700'
+                            : f.severity === 'warning'
+                            ? 'bg-amber-100 text-amber-700'
+                            : 'bg-blue-100 text-blue-700'
+                        }`}
+                      >
+                        {f.severity}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p
+                          className="text-xs text-gray-700 cursor-pointer"
+                          onClick={() => f.nodeId && setSelectedNodeId(f.nodeId)}
+                        >
+                          {f.message}
+                        </p>
+                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                          <code className="text-[10px] text-gray-400">{f.ruleId}</code>
+                          {f.source && (
+                            <span
+                              className={`text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ${
+                                f.source === 'ai'
+                                  ? 'bg-violet-50 text-violet-700 border border-violet-200'
+                                  : 'bg-gray-100 text-gray-600 border border-gray-200'
+                              }`}
+                            >
+                              {f.source}
+                            </span>
+                          )}
+                          {f.reference && (
+                            <a
+                              href={f.reference}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[10px] text-azure-500 hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              Microsoft Learn ↗
+                            </a>
+                          )}
+                          {f.requiresAcknowledgement && (
+                            <label
+                              className={`inline-flex items-center gap-1.5 text-[10px] font-medium px-1.5 py-0.5 rounded cursor-pointer border ${
+                                isAcked
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : 'bg-amber-50 text-amber-800 border-amber-200'
+                              }`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isAcked}
+                                onChange={() => toggleAck(key)}
+                                className="h-3 w-3 cursor-pointer"
+                              />
+                              I acknowledge this is not Microsoft best practice
+                            </label>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </li>
-                ))}
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>

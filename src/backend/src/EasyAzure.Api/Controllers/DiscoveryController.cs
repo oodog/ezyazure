@@ -40,6 +40,18 @@ public class DiscoveryController : ControllerBase
         return Ok(graph);
     }
 
+    [HttpPost("topology")]
+    public async Task<ActionResult<TopologyGraph>> GetTopologyMulti(
+        [FromBody] MultiSubscriptionRequest request, CancellationToken ct)
+    {
+        if (request.SubscriptionIds is null || request.SubscriptionIds.Count == 0)
+        {
+            return BadRequest(new { error = "At least one subscriptionId is required." });
+        }
+        var graph = await _discovery.GetTopologyMultiAsync(request.SubscriptionIds, ct);
+        return Ok(graph);
+    }
+
     [HttpPost("run")]
     [Authorize(Policy = "Reader")]
     public async Task<ActionResult<DiscoveryJobStatus>> TriggerDiscovery(

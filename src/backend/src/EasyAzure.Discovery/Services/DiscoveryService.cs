@@ -64,6 +64,12 @@ public class DiscoveryService : IDiscoveryService
         return await _topology.BuildTopologyAsync(subscriptionId, ct);
     }
 
+    public async Task<TopologyGraph> GetTopologyMultiAsync(IReadOnlyList<string> subscriptionIds, CancellationToken ct = default)
+    {
+        _logger.LogInformation("Building topology across {Count} subscription(s)", subscriptionIds.Count);
+        return await _topology.BuildTopologyMultiAsync(subscriptionIds, ct);
+    }
+
     public Task<DiscoveryJobStatus> TriggerDiscoveryAsync(string subscriptionId, CancellationToken ct = default)
     {
         // In production, enqueue a Container Apps Job.

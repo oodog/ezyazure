@@ -79,6 +79,8 @@ public record DriftWarning(string ResourceId, string Message);
 
 public record TriggerDiscoveryRequest(string SubscriptionId);
 
+public record MultiSubscriptionRequest(IReadOnlyList<string> SubscriptionIds);
+
 public record DiscoveryJobStatus
 {
     public required string JobId { get; init; }
