@@ -45,12 +45,28 @@ function QuickActionBtn({ label, description, href, accent, icon }: QuickAction)
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
-  const [apiError, setApiError] = useState(false)
+  const [apiError, setApiError] = useState<string | null>(null)
 
   useEffect(() => {
     discoveryService.getDashboardStats()
       .then(setStats)
-      .catch(() => setApiError(true))
+      .catch((err: unknown) => {
+        const e = err as { response?: { status?: number; data?: unknown }; message?: string; code?: string }
+        const status = e?.response?.status
+        const detail = typeof e?.response?.data === 'string'
+          ? e.response.data
+          : JSON.stringify(e?.response?.data ?? {})
+        // ERR_NETWORK = CORS/preflight/DNS/connection (no HTTP status visible to JS).
+        // ERR_BAD_REQUEST + status 401 = signed-in but token rejected by API.
+        // ERR_BAD_REQUEST + status 403 = signed-in but no role assignment.
+        const parts = [
+          status ? `HTTP ${status}` : '',
+          e?.code ?? '',
+          e?.message ?? '',
+          detail !== '{}' && detail !== '""' ? detail : '',
+        ].filter(Boolean)
+        setApiError(parts.join(' • '))
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -98,11 +114,14 @@ export default function Dashboard() {
     <div className="space-y-6">
       {/* API error banner */}
       {apiError && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 flex items-center gap-2">
-          <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 flex items-start gap-2">
+          <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
           </svg>
-          API unavailable — showing cached or empty data. Check that the backend Container App is running.
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold">API unavailable — showing cached or empty data.</p>
+            <p className="text-xs text-amber-700 mt-0.5 break-all font-mono">{apiError}</p>
+          </div>
         </div>
       )}
       {/* Hero */}

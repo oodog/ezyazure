@@ -29,6 +29,7 @@ export const loginRequest = {
     'profile',
     'offline_access',
     'User.Read',
+    `api://${import.meta.env.VITE_AZURE_CLIENT_ID}/access_as_user`,
   ],
 }
 
