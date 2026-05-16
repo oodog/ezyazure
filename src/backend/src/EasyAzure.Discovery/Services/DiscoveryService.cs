@@ -29,14 +29,33 @@ public class DiscoveryService : IDiscoveryService
 
     public async Task<DashboardStats> GetDashboardStatsAsync(CancellationToken ct = default)
     {
-        var subscriptions = await ListSubscriptionsAsync(ct);
-        var resourceCount = await _resourceGraph.CountAllResourcesAsync(ct);
+        // Each tile is fetched independently so a single failure (missing RBAC,
+        // network blip, transient Resource Graph error) downgrades the affected
+        // metric to zero rather than failing the entire dashboard request.
+        var subscriptionCount = 0;
+        try
+        {
+            var subscriptions = await ListSubscriptionsAsync(ct);
+            subscriptionCount = subscriptions.Count;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Dashboard: listing subscriptions failed; defaulting to 0.");
+        }
+
+        var resourceCount = 0;
+        try { resourceCount = await _resourceGraph.CountAllResourcesAsync(ct); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Dashboard: counting resources failed; defaulting to 0."); }
+
+        var vnetCount = 0;
+        try { vnetCount = await _resourceGraph.CountResourceTypeAsync("Microsoft.Network/virtualNetworks", ct); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Dashboard: counting VNets failed; defaulting to 0."); }
 
         return new DashboardStats
         {
-            SubscriptionCount = subscriptions.Count,
+            SubscriptionCount = subscriptionCount,
             ResourceCount = resourceCount,
-            VNetCount = await _resourceGraph.CountResourceTypeAsync("Microsoft.Network/virtualNetworks", ct),
+            VNetCount = vnetCount,
             DriftWarnings = 0,
             RecentDeployments = 0,
         };
