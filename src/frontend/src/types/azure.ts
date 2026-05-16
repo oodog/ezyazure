@@ -44,6 +44,19 @@ export interface FlowEdge {
   source: string
   target: string
   label?: string
+  /**
+   * Visual category sent by the backend so the canvas can colour edges:
+   * `default-route` is always rendered red because 0.0.0.0/0 is the
+   * highest-impact routing decision in any Azure environment.
+   */
+  category?:
+    | 'contains'
+    | 'associatedWith'
+    | 'peering'
+    | 'route'
+    | 'default-route'
+    | string
+  metadata?: Record<string, string>
 }
 
 export interface DashboardStats {

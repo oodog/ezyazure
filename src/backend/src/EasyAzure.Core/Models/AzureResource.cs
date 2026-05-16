@@ -52,11 +52,29 @@ public record FlowNode(
     FlowPosition Position,
     AzureResource Data);
 
+/// <summary>
+/// Categorises the visual treatment of a topology edge. The frontend maps the
+/// category to a colour/animation so default routes, peerings and containment
+/// edges are visually distinguishable.
+/// </summary>
+public static class FlowEdgeCategory
+{
+    public const string Contains = "contains";
+    public const string AssociatedWith = "associatedWith";
+    public const string Peering = "peering";
+    public const string Route = "route";
+    /// <summary>Default route (0.0.0.0/0) — always rendered red because it controls
+    /// north/south traffic and is the single highest-impact misconfiguration vector.</summary>
+    public const string DefaultRoute = "default-route";
+}
+
 public record FlowEdge(
     string Id,
     string Source,
     string Target,
-    string? Label = null);
+    string? Label = null,
+    string? Category = null,
+    Dictionary<string, string>? Metadata = null);
 
 public record FlowPosition(double X, double Y);
 

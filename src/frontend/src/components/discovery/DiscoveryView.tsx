@@ -7,18 +7,82 @@ import ReactFlow, {
   useEdgesState,
   addEdge,
   Connection,
+  MarkerType,
+  type Edge,
+  type Node,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import { useParams } from 'react-router-dom'
 import { discoveryService } from '@/services/discoveryService'
 import ResourcePanel from './ResourcePanel'
 import ReplicateDialog from './ReplicateDialog'
+import DiscoveryResourceNode from './DiscoveryResourceNode'
 import { useManualSubscriptions, isValidSubscriptionId } from '@/hooks/useManualSubscriptions'
-import type { AzureResource } from '@/types/azure'
+import type { AzureResource, FlowEdge as ApiFlowEdge, FlowNode as ApiFlowNode } from '@/types/azure'
+
+const nodeTypes = { azureResource: DiscoveryResourceNode }
+
+/**
+ * Visual treatment per backend edge category. Default routes are always rendered
+ * in red because 0.0.0.0/0 controls north/south traffic and is the single
+ * highest-impact misconfiguration vector.
+ * Reference: https://learn.microsoft.com/azure/virtual-network/virtual-networks-udr-overview
+ */
+function edgeStyleFor(category: string | undefined) {
+  switch (category) {
+    case 'default-route':
+      return {
+        stroke: '#dc2626', // red-600
+        strokeWidth: 3,
+        animated: true,
+        dash: undefined,
+      }
+    case 'peering':
+      return { stroke: '#2563eb', strokeWidth: 2, animated: false, dash: '6 4' }
+    case 'route':
+      return { stroke: '#f59e0b', strokeWidth: 2, animated: false, dash: undefined }
+    case 'associatedWith':
+      return { stroke: '#94a3b8', strokeWidth: 1.5, animated: false, dash: '4 4' }
+    case 'contains':
+    default:
+      return { stroke: '#cbd5e1', strokeWidth: 1.5, animated: false, dash: undefined }
+  }
+}
+
+function toReactFlowNode(n: ApiFlowNode): Node<AzureResource> {
+  return {
+    id: n.id,
+    type: 'azureResource',
+    position: n.position,
+    data: n.data,
+  }
+}
+
+function toReactFlowEdge(e: ApiFlowEdge): Edge {
+  const s = edgeStyleFor(e.category)
+  return {
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    label: e.label,
+    animated: s.animated,
+    style: {
+      stroke: s.stroke,
+      strokeWidth: s.strokeWidth,
+      strokeDasharray: s.dash,
+    },
+    labelStyle: { fontSize: 10, fontWeight: 600, fill: s.stroke },
+    labelBgStyle: { fill: '#ffffff', fillOpacity: 0.9 },
+    labelBgPadding: [4, 2],
+    labelBgBorderRadius: 4,
+    markerEnd: { type: MarkerType.ArrowClosed, color: s.stroke },
+    data: { category: e.category, metadata: e.metadata },
+  }
+}
 
 export default function DiscoveryView() {
   const { subscriptionId } = useParams()
-  const [nodes, setNodes, onNodesChange] = useNodesState([])
+  const [nodes, setNodes, onNodesChange] = useNodesState<AzureResource>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [selectedResource, setSelectedResource] = useState<AzureResource | null>(null)
   const [loading, setLoading] = useState(false)
@@ -89,8 +153,8 @@ export default function DiscoveryView() {
         selectedSubIds.length === 1
           ? await discoveryService.getTopology(selectedSubIds[0])
           : await discoveryService.getTopologyMulti(selectedSubIds)
-      setNodes(topology.nodes)
-      setEdges(topology.edges)
+      setNodes(topology.nodes.map(toReactFlowNode))
+      setEdges(topology.edges.map(toReactFlowEdge))
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Discovery failed.')
     } finally {
@@ -232,6 +296,7 @@ export default function DiscoveryView() {
           <ReactFlow
             nodes={nodes}
             edges={edges}
+            nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -241,6 +306,14 @@ export default function DiscoveryView() {
             <Background />
             <Controls />
             <MiniMap />
+            {/* Legend so users immediately know that red = default route. */}
+            <div className="absolute bottom-3 left-3 z-10 bg-white/95 backdrop-blur border border-gray-200 rounded-lg px-3 py-2 shadow text-[11px] space-y-1">
+              <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#dc2626' }} /> <span className="font-semibold text-red-700">Default route (0.0.0.0/0)</span></div>
+              <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#2563eb', borderTop: '1px dashed #2563eb' }} /> VNet peering</div>
+              <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#f59e0b' }} /> Route table (UDR)</div>
+              <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#94a3b8' }} /> Association</div>
+              <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#cbd5e1' }} /> VNet → Subnet</div>
+            </div>
           </ReactFlow>
         </div>
       </div>
