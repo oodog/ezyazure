@@ -29,8 +29,20 @@ public class DiscoveryController : ControllerBase
     [HttpGet("subscriptions")]
     public async Task<ActionResult<IReadOnlyList<SubscriptionSummary>>> ListSubscriptions(CancellationToken ct)
     {
-        var subs = await _discovery.ListSubscriptionsAsync(ct);
-        return Ok(subs);
+        // The API runs as a Container App managed identity that may not have
+        // visibility into the caller's subscriptions. Return an empty list with
+        // a logged warning instead of failing — the SPA allows users to add
+        // subscription IDs manually for resources the MI has been granted on.
+        try
+        {
+            var subs = await _discovery.ListSubscriptionsAsync(ct);
+            return Ok(subs);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ListSubscriptions: managed identity could not enumerate subscriptions.");
+            return Ok(Array.Empty<SubscriptionSummary>());
+        }
     }
 
     [HttpGet("topology/{subscriptionId}")]

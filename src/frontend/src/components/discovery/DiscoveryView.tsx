@@ -13,6 +13,7 @@ import { useParams } from 'react-router-dom'
 import { discoveryService } from '@/services/discoveryService'
 import ResourcePanel from './ResourcePanel'
 import ReplicateDialog from './ReplicateDialog'
+import { useManualSubscriptions, isValidSubscriptionId } from '@/hooks/useManualSubscriptions'
 import type { AzureResource } from '@/types/azure'
 
 export default function DiscoveryView() {
@@ -21,7 +22,11 @@ export default function DiscoveryView() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [selectedResource, setSelectedResource] = useState<AzureResource | null>(null)
   const [loading, setLoading] = useState(false)
-  const [subscriptions, setSubscriptions] = useState<{ id: string; displayName: string }[]>([])
+  const [apiSubs, setApiSubs] = useState<{ id: string; displayName: string }[]>([])
+  const manual = useManualSubscriptions()
+  const [manualInputId, setManualInputId] = useState('')
+  const [manualInputName, setManualInputName] = useState('')
+  const [manualError, setManualError] = useState<string | null>(null)
   const [selectedSubs, setSelectedSubs] = useState<Set<string>>(
     () => new Set(subscriptionId ? [subscriptionId] : []),
   )
@@ -30,10 +35,19 @@ export default function DiscoveryView() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    discoveryService.listSubscriptions().then(setSubscriptions).catch((e) => {
+    discoveryService.listSubscriptions().then(setApiSubs).catch((e) => {
       setError(e instanceof Error ? e.message : 'Failed to load subscriptions.')
     })
   }, [])
+
+  // Merge API-visible + manually-added subscriptions, de-duplicated by id.
+  // Manual entries override API entries so users can label them however they want.
+  const subscriptions = useMemo(() => {
+    const map = new Map<string, { id: string; displayName: string; source: 'api' | 'manual' }>()
+    for (const s of apiSubs) map.set(s.id.toLowerCase(), { ...s, source: 'api' })
+    for (const s of manual.items) map.set(s.id.toLowerCase(), { ...s, source: 'manual' })
+    return Array.from(map.values())
+  }, [apiSubs, manual.items])
 
   const selectedSubIds = useMemo(() => Array.from(selectedSubs), [selectedSubs])
 
@@ -48,6 +62,23 @@ export default function DiscoveryView() {
 
   const selectAllSubs = () => setSelectedSubs(new Set(subscriptions.map((s) => s.id)))
   const clearSubs = () => setSelectedSubs(new Set())
+
+  const addManualSub = () => {
+    const id = manualInputId.trim()
+    if (!isValidSubscriptionId(id)) {
+      setManualError('Subscription ID must be a GUID, e.g. 9f19629c-4416-43e2-8986-0a8371d83347')
+      return
+    }
+    const ok = manual.add(id, manualInputName)
+    if (!ok) {
+      setManualError('Invalid subscription ID format.')
+      return
+    }
+    setSelectedSubs((prev) => new Set([...prev, id.toLowerCase()]))
+    setManualInputId('')
+    setManualInputName('')
+    setManualError(null)
+  }
 
   const runDiscovery = useCallback(async () => {
     if (selectedSubIds.length === 0) return
@@ -110,7 +141,7 @@ export default function DiscoveryView() {
                   </button>
                 </div>
                 {subscriptions.length === 0 ? (
-                  <p className="px-3 py-4 text-xs text-gray-500">No subscriptions visible.</p>
+                  <p className="px-3 py-4 text-xs text-gray-500">No subscriptions visible. Add a subscription ID below.</p>
                 ) : (
                   <ul className="py-1">
                     {subscriptions.map((s) => (
@@ -121,12 +152,57 @@ export default function DiscoveryView() {
                             checked={selectedSubs.has(s.id)}
                             onChange={() => toggleSub(s.id)}
                           />
-                          <span className="truncate">{s.displayName}</span>
+                          <span className="truncate flex-1">{s.displayName}</span>
+                          {(s as { source?: string }).source === 'manual' && (
+                            <>
+                              <span className="text-[10px] uppercase tracking-wide text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded">manual</span>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.preventDefault(); manual.remove(s.id) }}
+                                className="text-xs text-gray-400 hover:text-red-600"
+                                title="Remove this manually-added subscription"
+                              >
+                                ✕
+                              </button>
+                            </>
+                          )}
                         </label>
                       </li>
                     ))}
                   </ul>
                 )}
+                {/* Manual subscription ID entry. Use when the API's managed identity
+                    cannot enumerate your subscriptions. Grant the MI Reader on the
+                    target sub first:
+                    https://learn.microsoft.com/azure/role-based-access-control/role-assignments-cli */}
+                <div className="border-t border-gray-100 px-3 py-3 space-y-2 bg-gray-50">
+                  <p className="text-xs font-semibold text-gray-700">Add subscription ID</p>
+                  <input
+                    type="text"
+                    value={manualInputId}
+                    onChange={(e) => { setManualInputId(e.target.value); setManualError(null) }}
+                    placeholder="9f19629c-4416-43e2-8986-0a8371d83347"
+                    className="w-full text-xs px-2 py-1.5 border border-gray-300 rounded font-mono"
+                    spellCheck={false}
+                  />
+                  <input
+                    type="text"
+                    value={manualInputName}
+                    onChange={(e) => setManualInputName(e.target.value)}
+                    placeholder="Display name (optional)"
+                    className="w-full text-xs px-2 py-1.5 border border-gray-300 rounded"
+                  />
+                  {manualError && (
+                    <p className="text-[11px] text-red-600">{manualError}</p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={addManualSub}
+                    className="w-full text-xs bg-azure-500 hover:bg-azure-600 text-white font-medium px-2 py-1.5 rounded"
+                  >
+                    Add
+                  </button>
+                </div>
               </div>
             )}
           </div>
