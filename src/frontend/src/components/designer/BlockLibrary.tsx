@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { blockCategories, categoryStyles, blockIcons, type CategoryName } from './blockMetadata'
+import { blockCategories, categoryStyles, type CategoryName } from './blockMetadata'
 import type { BlockMeta } from './blockMetadata'
+import { getAzureIconForBlockType } from '@/utils/azureIconMap'
 
 function BlockItem({ meta, onDragStart }: { meta: BlockMeta; onDragStart: (e: React.DragEvent, type: string) => void }) {
   const styles = categoryStyles[meta.category]
-  const iconPath = blockIcons[meta.type] ?? blockIcons['Resource Group']
+  const iconSrc = getAzureIconForBlockType(meta.type)
 
   return (
     <div
@@ -18,16 +19,13 @@ function BlockItem({ meta, onDragStart }: { meta: BlockMeta; onDragStart: (e: Re
         className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
         style={{ backgroundColor: styles.accent + '18' }}
       >
-        <svg
-          className="w-3.5 h-3.5"
-          style={{ color: styles.accent }}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={1.75}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d={iconPath} />
-        </svg>
+        <img
+          src={iconSrc}
+          alt=""
+          className="w-3.5 h-3.5 object-contain"
+          loading="lazy"
+          decoding="async"
+        />
       </div>
 
       {/* Label */}

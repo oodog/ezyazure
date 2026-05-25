@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { getBlockMeta, categoryStyles, blockIcons } from './blockMetadata'
+import { getBlockMeta, categoryStyles } from './blockMetadata'
 import { getBlockSchema, type FieldDef } from './blockSchemas'
+import { getAzureIconForBlockType } from '@/utils/azureIconMap'
 import type { DesignBlock } from '@/types/designer'
 
 interface Props {
@@ -86,7 +87,7 @@ export function FieldInput({ field, value, onChange }: { field: FieldDef; value:
 export default function PropertyEditor({ nodeId, block, onChange, onClose }: Props) {
   const meta = getBlockMeta(block.blockType)
   const styles = categoryStyles[meta.category]
-  const iconPath = blockIcons[block.blockType] ?? blockIcons['Resource Group']
+  const iconSrc = getAzureIconForBlockType(block.blockType)
   const schema = getBlockSchema(block.blockType)
 
   const [label, setLabel] = useState(block.label)
@@ -146,10 +147,13 @@ export default function PropertyEditor({ nodeId, block, onChange, onClose }: Pro
         <div className="flex items-center gap-3 min-w-0">
           <div className="flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center"
             style={{ backgroundColor: styles.accent + '20' }}>
-            <svg className="w-5 h-5" style={{ color: styles.accent }}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-              <path strokeLinecap="round" strokeLinejoin="round" d={iconPath} />
-            </svg>
+            <img
+              src={iconSrc}
+              alt=""
+              className="w-5 h-5 object-contain"
+              loading="lazy"
+              decoding="async"
+            />
           </div>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-gray-900 truncate">{label}</p>

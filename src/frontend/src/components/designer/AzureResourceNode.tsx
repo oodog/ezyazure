@@ -1,12 +1,13 @@
 import { memo } from 'react'
 import { Handle, Position, type NodeProps } from 'reactflow'
-import { getBlockMeta, categoryStyles, blockIcons } from './blockMetadata'
+import { getBlockMeta, categoryStyles } from './blockMetadata'
+import { getAzureIconForBlockType } from '@/utils/azureIconMap'
 import type { DesignBlock } from '@/types/designer'
 
 function AzureResourceNode({ data, selected }: NodeProps<DesignBlock>) {
   const meta = getBlockMeta(data.blockType)
   const styles = categoryStyles[meta.category]
-  const iconPath = blockIcons[data.blockType] ?? blockIcons['Resource Group']
+  const iconSrc = getAzureIconForBlockType(data.blockType)
 
   return (
     <div
@@ -38,24 +39,13 @@ function AzureResourceNode({ data, selected }: NodeProps<DesignBlock>) {
             className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center mt-0.5"
             style={{ backgroundColor: styles.accent + '20' }}
           >
-            <svg
-              className="w-4 h-4"
-              style={{ color: styles.accent }}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.75}
-            >
-              {/* AKS uses two paths */}
-              {(data.blockType === 'AKS' || data.blockType === 'AKS baseline') ? (
-                <>
-                  <path strokeLinecap="round" strokeLinejoin="round" d={iconPath} />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </>
-              ) : (
-                <path strokeLinecap="round" strokeLinejoin="round" d={iconPath} />
-              )}
-            </svg>
+            <img
+              src={iconSrc}
+              alt=""
+              className="w-4 h-4 object-contain"
+              loading="lazy"
+              decoding="async"
+            />
           </div>
 
           {/* Text */}

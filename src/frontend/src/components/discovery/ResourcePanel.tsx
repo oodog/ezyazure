@@ -1,4 +1,11 @@
 import type { AzureResource } from '@/types/azure'
+import {
+  getSubnetAssociations,
+  getSubnetPrefixes,
+  getVNetDnsServers,
+  getVNetPrefixes,
+  shortResourceId,
+} from '@/utils/azureResourceDetails'
 
 interface Props {
   resource: AzureResource
@@ -6,6 +13,11 @@ interface Props {
 }
 
 export default function ResourcePanel({ resource, onClose }: Props) {
+  const vnetPrefixes = getVNetPrefixes(resource)
+  const subnetPrefixes = getSubnetPrefixes(resource)
+  const dnsServers = getVNetDnsServers(resource)
+  const subnetAssoc = getSubnetAssociations(resource)
+
   return (
     <aside className="w-80 bg-white border border-gray-200 rounded-xl p-5 shrink-0 overflow-y-auto">
       <div className="flex items-start justify-between mb-4">
@@ -32,6 +44,53 @@ export default function ResourcePanel({ resource, onClose }: Props) {
           <dt className="text-gray-400 text-xs uppercase tracking-wide">Location</dt>
           <dd className="text-gray-700 mt-0.5">{resource.location}</dd>
         </div>
+        {vnetPrefixes.length > 0 && (
+          <div>
+            <dt className="text-gray-400 text-xs uppercase tracking-wide mb-1">VNet Address Space</dt>
+            <dd className="flex flex-wrap gap-1">
+              {vnetPrefixes.map((prefix) => (
+                <span key={prefix} className="bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded-full font-mono">
+                  {prefix}
+                </span>
+              ))}
+            </dd>
+          </div>
+        )}
+        {dnsServers.length > 0 && (
+          <div>
+            <dt className="text-gray-400 text-xs uppercase tracking-wide mb-1">DNS Servers</dt>
+            <dd className="flex flex-wrap gap-1">
+              {dnsServers.map((dns) => (
+                <span key={dns} className="bg-indigo-50 text-indigo-700 text-xs px-2 py-0.5 rounded-full font-mono">
+                  {dns}
+                </span>
+              ))}
+            </dd>
+          </div>
+        )}
+        {subnetPrefixes.length > 0 && (
+          <div>
+            <dt className="text-gray-400 text-xs uppercase tracking-wide mb-1">Subnet Prefixes</dt>
+            <dd className="flex flex-wrap gap-1">
+              {subnetPrefixes.map((prefix) => (
+                <span key={prefix} className="bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded-full font-mono">
+                  {prefix}
+                </span>
+              ))}
+            </dd>
+          </div>
+        )}
+        {(subnetAssoc.nsgId || subnetAssoc.routeTableId) && (
+          <div className="space-y-1">
+            <dt className="text-gray-400 text-xs uppercase tracking-wide">Subnet Associations</dt>
+            {subnetAssoc.nsgId && (
+              <dd className="text-xs text-gray-700 font-mono">NSG: {shortResourceId(subnetAssoc.nsgId)}</dd>
+            )}
+            {subnetAssoc.routeTableId && (
+              <dd className="text-xs text-gray-700 font-mono">Route table: {shortResourceId(subnetAssoc.routeTableId)}</dd>
+            )}
+          </div>
+        )}
         {Object.keys(resource.tags ?? {}).length > 0 && (
           <div>
             <dt className="text-gray-400 text-xs uppercase tracking-wide mb-1">Tags</dt>

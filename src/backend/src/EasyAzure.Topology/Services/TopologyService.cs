@@ -100,6 +100,23 @@ public class TopologyService : ITopologyService
                 if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(name)) continue;
 
                 var props = item["properties"] as JObject ?? [];
+                var dict = props.ToObject<Dictionary<string, object>>() ?? [];
+                // Flatten high-value fields so the frontend can display subnet details
+                // without deep JSON parsing assumptions.
+                var addressPrefix = props["addressPrefix"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(addressPrefix)) dict["addressPrefix"] = addressPrefix;
+
+                if (props["addressPrefixes"] is JArray prefixes)
+                {
+                    dict["addressPrefixes"] = prefixes;
+                }
+
+                var nsgId = (props["networkSecurityGroup"] as JObject)?["id"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(nsgId)) dict["networkSecurityGroupId"] = nsgId;
+
+                var routeTableId = (props["routeTable"] as JObject)?["id"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(routeTableId)) dict["routeTableId"] = routeTableId;
+
                 subnets.Add(new AzureResource
                 {
                     Id = id,
@@ -108,7 +125,7 @@ public class TopologyService : ITopologyService
                     Location = vnet.Location,
                     ResourceGroup = vnet.ResourceGroup,
                     SubscriptionId = vnet.SubscriptionId,
-                    Properties = props.ToObject<Dictionary<string, object>>() ?? [],
+                    Properties = dict,
                 });
             }
         }

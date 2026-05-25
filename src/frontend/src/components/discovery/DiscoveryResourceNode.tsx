@@ -1,6 +1,8 @@
 import { memo } from 'react'
 import { Handle, Position, type NodeProps } from 'reactflow'
 import type { AzureResource } from '@/types/azure'
+import { getAzureIconForResourceType } from '@/utils/azureIconMap'
+import { getSubnetPrefixes, getVNetPrefixes } from '@/utils/azureResourceDetails'
 
 /**
  * Maps a full Azure ARM resource `type` (e.g. `Microsoft.Network/virtualNetworks`)
@@ -8,25 +10,25 @@ import type { AzureResource } from '@/types/azure'
  * `categoryStyles` so discovery boxes feel like the same component library.
  * Reference: https://learn.microsoft.com/azure/azure-resource-manager/management/resource-providers-and-types
  */
-function categorise(type: string): { label: string; accent: string; icon: string } {
+function categorise(type: string): { label: string; accent: string } {
   const t = type.toLowerCase()
   if (t === 'microsoft.network/virtualnetworks')
-    return { label: 'VNet', accent: '#3b82f6', icon: 'M21 12a9 9 0 11-18 0 9 9 0 0118 0zM3 12h18M12 3a15 15 0 010 18M12 3a15 15 0 000 18' }
+    return { label: 'VNet', accent: '#3b82f6' }
   if (t === 'microsoft.network/virtualnetworks/subnets')
-    return { label: 'Subnet', accent: '#60a5fa', icon: 'M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z' }
+    return { label: 'Subnet', accent: '#60a5fa' }
   if (t === 'microsoft.network/networksecuritygroups')
-    return { label: 'NSG', accent: '#f43f5e', icon: 'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z' }
+    return { label: 'NSG', accent: '#f43f5e' }
   if (t === 'microsoft.network/routetables')
-    return { label: 'Route Table', accent: '#f59e0b', icon: 'M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7' }
+    return { label: 'Route Table', accent: '#f59e0b' }
   if (t === 'microsoft.network/privateendpoints')
-    return { label: 'Private Endpoint', accent: '#10b981', icon: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' }
+    return { label: 'Private Endpoint', accent: '#10b981' }
   if (t === 'microsoft.compute/virtualmachines')
-    return { label: 'VM', accent: '#8b5cf6', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z' }
+    return { label: 'VM', accent: '#8b5cf6' }
   if (t.startsWith('microsoft.storage/'))
-    return { label: 'Storage', accent: '#0ea5e9', icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4' }
+    return { label: 'Storage', accent: '#0ea5e9' }
   if (t.startsWith('microsoft.sql/'))
-    return { label: 'SQL', accent: '#0284c7', icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4' }
-  return { label: type.split('/').pop() ?? 'Resource', accent: '#64748b', icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z' }
+    return { label: 'SQL', accent: '#0284c7' }
+  return { label: type.split('/').pop() ?? 'Resource', accent: '#64748b' }
 }
 
 interface NodeData extends AzureResource {
@@ -36,6 +38,8 @@ interface NodeData extends AzureResource {
 
 function DiscoveryResourceNode({ data, selected }: NodeProps<NodeData>) {
   const cat = categorise(data.type)
+  const iconSrc = getAzureIconForResourceType(data.type)
+  const prefix = getSubnetPrefixes(data)[0] ?? getVNetPrefixes(data)[0]
   return (
     <div
       className={`relative bg-white rounded-xl shadow-md border-2 transition-all duration-150 w-52 ${
@@ -55,13 +59,14 @@ function DiscoveryResourceNode({ data, selected }: NodeProps<NodeData>) {
             className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center mt-0.5"
             style={{ backgroundColor: cat.accent + '20' }}
           >
-            <svg className="w-4 h-4" style={{ color: cat.accent }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-              <path strokeLinecap="round" strokeLinejoin="round" d={cat.icon} />
-            </svg>
+            <img src={iconSrc} alt="" className="w-4 h-4 object-contain" loading="lazy" decoding="async" />
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold text-gray-800 leading-tight truncate" title={data.name}>{data.name}</p>
             <p className="text-[10px] font-medium mt-0.5 truncate" style={{ color: cat.accent }}>{cat.label}</p>
+            {prefix && (
+              <p className="text-[10px] text-blue-700 font-mono truncate" title={prefix}>{prefix}</p>
+            )}
             {data.location && (
               <p className="text-[10px] text-gray-500 truncate" title={data.resourceGroup}>{data.location}</p>
             )}
