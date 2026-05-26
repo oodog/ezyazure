@@ -36,6 +36,7 @@ public class TopologyService : ITopologyService
             subscriptionIds.Count, string.Join(", ", subscriptionIds));
 
         var allResources = new List<AzureResource>();
+        var networkInterfaces = new List<AzureResource>();
         foreach (var subscriptionId in subscriptionIds)
         {
             // Each collector is wrapped so missing RBAC on a single resource type
@@ -45,6 +46,7 @@ public class TopologyService : ITopologyService
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetRouteTablesAsync(subscriptionId, ct), "RouteTables", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetVMsAsync(subscriptionId, ct), "VMs", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetPrivateEndpointsAsync(subscriptionId, ct), "PrivateEndpoints", subscriptionId));
+            networkInterfaces.AddRange(await SafeCollectAsync(() => _resourceGraph.GetNetworkInterfacesAsync(subscriptionId, ct), "NICs", subscriptionId));
         }
 
         // Subnets are nested inside VNet.properties.subnets — promote them to first-
@@ -53,7 +55,7 @@ public class TopologyService : ITopologyService
         allResources.AddRange(promotedSubnets);
 
         var nodes = BuildNodes(allResources);
-        var edges = BuildEdges(allResources);
+        var edges = BuildEdges(allResources, networkInterfaces);
 
         return new TopologyGraph(nodes, edges);
     }
@@ -172,11 +174,12 @@ public class TopologyService : ITopologyService
         _ => 4,
     };
 
-    private static List<FlowEdge> BuildEdges(List<AzureResource> resources)
+    private static List<FlowEdge> BuildEdges(List<AzureResource> resources, List<AzureResource> networkInterfaces)
     {
         var edges = new List<FlowEdge>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var byId = resources.ToDictionary(r => r.Id, StringComparer.OrdinalIgnoreCase);
+        var nicToSubnetIds = BuildNicSubnetIndex(networkInterfaces);
         var routeTables = resources
             .Where(r => r.Type.Equals("Microsoft.Network/routeTables", StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -206,7 +209,7 @@ public class TopologyService : ITopologyService
                     AddPrivateEndpointEdges(resource, Emit);
                     break;
                 case "microsoft.compute/virtualmachines":
-                    AddVmEdges(resource, Emit);
+                    AddVmEdges(resource, nicToSubnetIds, Emit);
                     break;
             }
         }
@@ -293,8 +296,9 @@ public class TopologyService : ITopologyService
     private static void AddSubnetEdges(AzureResource subnet, Dictionary<string, AzureResource> byId, Action<FlowEdge> emit)
     {
         // Subnet → NSG association
-        if (subnet.Properties.TryGetValue("networkSecurityGroup", out var nsgRefObj) &&
-            nsgRefObj is JObject nsgRef && nsgRef["id"]?.ToString() is { Length: > 0 } nsgId)
+        var nsgId = TryGetReferenceId(subnet.Properties, "networkSecurityGroup")
+            ?? TryGetString(subnet.Properties, "networkSecurityGroupId");
+        if (!string.IsNullOrWhiteSpace(nsgId))
         {
             emit(new FlowEdge(
                 Id: $"nsg|{subnet.Id}|{nsgId}",
@@ -305,8 +309,9 @@ public class TopologyService : ITopologyService
         }
 
         // Subnet → Route Table association
-        if (subnet.Properties.TryGetValue("routeTable", out var rtRefObj) &&
-            rtRefObj is JObject rtRef && rtRef["id"]?.ToString() is { Length: > 0 } rtId)
+        var rtId = TryGetReferenceId(subnet.Properties, "routeTable")
+            ?? TryGetString(subnet.Properties, "routeTableId");
+        if (!string.IsNullOrWhiteSpace(rtId))
         {
             emit(new FlowEdge(
                 Id: $"udr|{subnet.Id}|{rtId}",
@@ -319,10 +324,9 @@ public class TopologyService : ITopologyService
 
     private static void AddNsgEdges(AzureResource nsg, Action<FlowEdge> emit)
     {
-        if (!TryGetJArray(nsg.Properties, "subnets", out var attached)) return;
-        foreach (var s in attached.OfType<JObject>())
+        if (!TryGetRefIdList(nsg.Properties, "subnets", out var attachedSubnetIds)) return;
+        foreach (var id in attachedSubnetIds)
         {
-            var id = s["id"]?.ToString();
             if (string.IsNullOrEmpty(id)) continue;
             emit(new FlowEdge(
                 Id: $"nsg|{id}|{nsg.Id}",
@@ -335,10 +339,9 @@ public class TopologyService : ITopologyService
 
     private static void AddRouteTableEdges(AzureResource rt, Action<FlowEdge> emit)
     {
-        if (!TryGetJArray(rt.Properties, "subnets", out var attached)) return;
-        foreach (var s in attached.OfType<JObject>())
+        if (!TryGetRefIdList(rt.Properties, "subnets", out var attachedSubnetIds)) return;
+        foreach (var id in attachedSubnetIds)
         {
-            var id = s["id"]?.ToString();
             if (string.IsNullOrEmpty(id)) continue;
             emit(new FlowEdge(
                 Id: $"udr|{id}|{rt.Id}",
@@ -364,19 +367,175 @@ public class TopologyService : ITopologyService
         }
     }
 
-    private static void AddVmEdges(AzureResource vm, Action<FlowEdge> emit)
+    private static void AddVmEdges(AzureResource vm, Dictionary<string, HashSet<string>> nicToSubnetIds, Action<FlowEdge> emit)
     {
-        // VMs reference NICs; NICs reference subnets. We don't have NICs in the
-        // resource set today, so emit a placeholder edge if the VM has an explicit
-        // subnetId in extended properties — otherwise skip. This is intentionally
-        // conservative to avoid noisy dangling edges.
+        if (!TryGetObjectCaseInsensitive(vm.Properties, "networkProfile", out var networkProfileObj)) return;
+        if (!TryGetRefIdList(networkProfileObj, "networkInterfaces", out var nicIds)) return;
+
+        foreach (var nicId in nicIds)
+        {
+            if (!nicToSubnetIds.TryGetValue(nicId, out var subnetIds)) continue;
+            foreach (var subnetId in subnetIds)
+            {
+                emit(new FlowEdge(
+                    Id: $"vm|{vm.Id}|{subnetId}",
+                    Source: vm.Id,
+                    Target: subnetId,
+                    Label: "in subnet",
+                    Category: FlowEdgeCategory.AssociatedWith));
+            }
+        }
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildNicSubnetIndex(List<AzureResource> networkInterfaces)
+    {
+        var index = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var nic in networkInterfaces)
+        {
+            if (!TryGetRefIdList(nic.Properties, "ipConfigurations", out var _))
+            {
+                // ipConfigurations is an array of objects containing properties.subnet.id
+                // so we parse it manually below; this probe keeps behavior explicit.
+            }
+
+            if (!TryGetArrayCaseInsensitive(nic.Properties, "ipConfigurations", out var ipConfigs)) continue;
+            foreach (var ipCfg in ipConfigs)
+            {
+                if (ipCfg is not JObject ipCfgObj) continue;
+                var subnetId = ((ipCfgObj["properties"] as JObject)?["subnet"] as JObject)?["id"]?.ToString();
+                if (string.IsNullOrWhiteSpace(subnetId)) continue;
+
+                if (!index.TryGetValue(nic.Id, out var set))
+                {
+                    set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    index[nic.Id] = set;
+                }
+                set.Add(subnetId);
+            }
+        }
+
+        return index;
+    }
+
+    private static bool TryGetObjectCaseInsensitive(IDictionary<string, object> dict, string key, out IDictionary<string, object> obj)
+    {
+        obj = new Dictionary<string, object>();
+        if (!TryGetValueCaseInsensitive(dict, key, out var value) || value is null) return false;
+
+        if (value is JObject jo)
+        {
+            obj = jo.ToObject<Dictionary<string, object>>() ?? new Dictionary<string, object>();
+            return true;
+        }
+
+        if (value is IDictionary<string, object> idict)
+        {
+            obj = idict;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string? TryGetString(IDictionary<string, object> dict, string key)
+    {
+        if (!TryGetValueCaseInsensitive(dict, key, out var value) || value is null) return null;
+        return value switch
+        {
+            string s when !string.IsNullOrWhiteSpace(s) => s,
+            JValue jv when jv.Type == JTokenType.String && !string.IsNullOrWhiteSpace(jv.ToString()) => jv.ToString(),
+            _ => null,
+        };
+    }
+
+    private static string? TryGetReferenceId(IDictionary<string, object> dict, string key)
+    {
+        if (!TryGetValueCaseInsensitive(dict, key, out var value) || value is null) return null;
+
+        if (value is JObject jo)
+        {
+            return jo["id"]?.ToString();
+        }
+
+        if (value is IDictionary<string, object> idict)
+        {
+            return TryGetString(idict, "id");
+        }
+
+        return null;
+    }
+
+    private static bool TryGetArrayCaseInsensitive(IDictionary<string, object> dict, string key, out JArray array)
+    {
+        array = [];
+        if (!TryGetValueCaseInsensitive(dict, key, out var value) || value is null) return false;
+        if (value is JArray ja)
+        {
+            array = ja;
+            return true;
+        }
+
+        if (value is IEnumerable<object> enumerable)
+        {
+            array = JArray.FromObject(enumerable);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetRefIdList(IDictionary<string, object> dict, string key, out List<string> ids)
+    {
+        ids = new List<string>();
+        if (!TryGetArrayCaseInsensitive(dict, key, out var arr)) return false;
+
+        foreach (var item in arr)
+        {
+            switch (item)
+            {
+                case JObject jo:
+                    {
+                        var id = jo["id"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(id)) ids.Add(id);
+                        break;
+                    }
+                case JValue jv when jv.Type == JTokenType.String:
+                    {
+                        var id = jv.ToString();
+                        if (!string.IsNullOrWhiteSpace(id)) ids.Add(id);
+                        break;
+                    }
+            }
+        }
+
+        return ids.Count > 0;
+    }
+
+    private static bool TryGetValueCaseInsensitive(IDictionary<string, object> dict, string key, out object? value)
+    {
+        foreach (var kvp in dict)
+        {
+            if (string.Equals(kvp.Key, key, StringComparison.OrdinalIgnoreCase))
+            {
+                value = kvp.Value;
+                return true;
+            }
+        }
+        value = null;
+        return false;
     }
 
     private static bool TryGetJArray(IDictionary<string, object> dict, string key, out JArray array)
     {
         array = [];
-        if (!dict.TryGetValue(key, out var v) || v is null) return false;
+        if (!TryGetValueCaseInsensitive(dict, key, out var v) || v is null) return false;
         if (v is JArray ja) { array = ja; return true; }
+        if (v is IEnumerable<object> enumerable)
+        {
+            array = JArray.FromObject(enumerable);
+            return true;
+        }
         return false;
     }
 }

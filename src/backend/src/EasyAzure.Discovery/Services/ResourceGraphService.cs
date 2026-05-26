@@ -89,6 +89,12 @@ public class ResourceGraphService
             "Resources | where type =~ 'Microsoft.Compute/virtualMachines' | project id, name, type, location, resourceGroup, subscriptionId, properties, tags",
             [subscriptionId], ct);
 
+    public Task<IReadOnlyList<AzureResource>> GetNetworkInterfacesAsync(
+        string subscriptionId, CancellationToken ct = default) =>
+        QueryAsync(
+            "Resources | where type =~ 'Microsoft.Network/networkInterfaces' | project id, name, type, location, resourceGroup, subscriptionId, properties, tags",
+            [subscriptionId], ct);
+
     public Task<IReadOnlyList<AzureResource>> GetPrivateEndpointsAsync(
         string subscriptionId, CancellationToken ct = default) =>
         QueryAsync(
