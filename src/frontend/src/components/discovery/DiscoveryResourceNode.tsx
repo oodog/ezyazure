@@ -22,6 +22,8 @@ function categorise(type: string): { label: string; accent: string } {
     return { label: 'Route Table', accent: '#f59e0b' }
   if (t === 'microsoft.network/privateendpoints')
     return { label: 'Private Endpoint', accent: '#10b981' }
+  if (t === 'easyazure.network/internet')
+    return { label: 'Internet', accent: '#0ea5e9' }
   if (t === 'microsoft.compute/virtualmachines')
     return { label: 'VM', accent: '#8b5cf6' }
   if (t.startsWith('microsoft.storage/'))

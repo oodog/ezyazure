@@ -37,6 +37,7 @@ const ICONS = {
   appSecurityGroup: `${ICON_BASE}/10244-icon-service-Application-Security-Groups.svg`,
   defender: `${ICON_BASE}/10241-icon-service-Microsoft-Defender-for-Cloud.svg`,
   logAnalytics: `${ICON_BASE}/00009-icon-service-Log-Analytics-Workspaces.svg`,
+  internet: `${ICON_BASE}/10808-icon-service-Globe-Success.svg`,
 } as const
 
 const RESOURCE_TYPE_MAP: Record<string, string> = {
@@ -67,6 +68,7 @@ const RESOURCE_TYPE_MAP: Record<string, string> = {
   'microsoft.keyvault/vaults': ICONS.keyVault,
   'microsoft.managedidentity/userassignedidentities': ICONS.managedIdentity,
   'microsoft.operationalinsights/workspaces': ICONS.logAnalytics,
+  'easyazure.network/internet': ICONS.internet,
 }
 
 const BLOCK_TYPE_MAP: Record<string, string> = {

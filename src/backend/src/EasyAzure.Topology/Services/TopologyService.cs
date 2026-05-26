@@ -16,6 +16,8 @@ public class TopologyService : ITopologyService
 {
     private readonly ResourceGraphService _resourceGraph;
     private readonly ILogger<TopologyService> _logger;
+    private const string InternetNodeId = "easyazure://internet";
+    private const string InternetNodeType = "EasyAzure.Network/Internet";
 
     public TopologyService(ResourceGraphService resourceGraph, ILogger<TopologyService> logger)
     {
@@ -42,6 +44,7 @@ public class TopologyService : ITopologyService
             // Each collector is wrapped so missing RBAC on a single resource type
             // never blocks the whole topology. Errors are logged + skipped.
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetVNetsAsync(subscriptionId, ct), "VNets", subscriptionId));
+            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetSubnetsAsync(subscriptionId, ct), "Subnets", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetNSGsAsync(subscriptionId, ct), "NSGs", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetRouteTablesAsync(subscriptionId, ct), "RouteTables", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetVMsAsync(subscriptionId, ct), "VMs", subscriptionId));
@@ -53,6 +56,12 @@ public class TopologyService : ITopologyService
         // class nodes so they can be referenced by NSG/route-table association edges.
         var promotedSubnets = PromoteSubnets(allResources);
         allResources.AddRange(promotedSubnets);
+
+        // Resource Graph can return the same logical resource from different queries
+        // with different property depths. Merge them by ID so edges and details use
+        // the richest available shape.
+        allResources = ConsolidateResources(allResources);
+        EnsureInternetNode(allResources);
 
         var nodes = BuildNodes(allResources);
         var edges = BuildEdges(allResources, networkInterfaces);
@@ -163,6 +172,66 @@ public class TopologyService : ITopologyService
         return nodes;
     }
 
+    private static List<AzureResource> ConsolidateResources(List<AzureResource> resources)
+    {
+        var merged = new Dictionary<string, AzureResource>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var r in resources)
+        {
+            if (string.IsNullOrWhiteSpace(r.Id)) continue;
+            if (!merged.TryGetValue(r.Id, out var existing))
+            {
+                merged[r.Id] = r;
+                continue;
+            }
+
+            var properties = new Dictionary<string, object>(existing.Properties, StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in r.Properties)
+            {
+                properties[kv.Key] = kv.Value;
+            }
+
+            var tags = new Dictionary<string, string>(existing.Tags, StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in r.Tags)
+            {
+                tags[kv.Key] = kv.Value;
+            }
+
+            merged[r.Id] = new AzureResource
+            {
+                Id = existing.Id,
+                Type = string.IsNullOrWhiteSpace(existing.Type) ? r.Type : existing.Type,
+                Name = string.IsNullOrWhiteSpace(existing.Name) ? r.Name : existing.Name,
+                SubscriptionId = string.IsNullOrWhiteSpace(existing.SubscriptionId) ? r.SubscriptionId : existing.SubscriptionId,
+                ResourceGroup = string.IsNullOrWhiteSpace(existing.ResourceGroup) ? r.ResourceGroup : existing.ResourceGroup,
+                Location = string.IsNullOrWhiteSpace(existing.Location) ? r.Location : existing.Location,
+                Properties = properties,
+                Tags = tags,
+            };
+        }
+
+        return merged.Values.ToList();
+    }
+
+    private static void EnsureInternetNode(List<AzureResource> resources)
+    {
+        if (resources.Any(r => string.Equals(r.Id, InternetNodeId, StringComparison.OrdinalIgnoreCase))) return;
+
+        resources.Add(new AzureResource
+        {
+            Id = InternetNodeId,
+            Type = InternetNodeType,
+            Name = "Internet",
+            SubscriptionId = "global",
+            ResourceGroup = "global",
+            Location = "global",
+            Properties = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["kind"] = "internet",
+            },
+        });
+    }
+
     private static int RowFor(string type) => type.ToLowerInvariant() switch
     {
         "microsoft.network/virtualnetworks" => 0,
@@ -180,6 +249,8 @@ public class TopologyService : ITopologyService
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var byId = resources.ToDictionary(r => r.Id, StringComparer.OrdinalIgnoreCase);
         var nicToSubnetIds = BuildNicSubnetIndex(networkInterfaces);
+        var hasDefaultRoute = false;
+        var routeTableToSubnetIds = BuildRouteTableSubnetIndex(resources);
         var routeTables = resources
             .Where(r => r.Type.Equals("Microsoft.Network/routeTables", StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -219,8 +290,22 @@ public class TopologyService : ITopologyService
         // subnet's routeTable property. Each route table's routes are inspected.
         foreach (var rt in routeTables)
         {
-            if (!TryGetJArray(rt.Properties, "subnets", out var attachedSubnets)) continue;
             if (!TryGetJArray(rt.Properties, "routes", out var routes)) continue;
+
+            var attachedSubnetIds = new List<string>();
+            if (TryGetRefIdList(rt.Properties, "subnets", out var fromRouteTable))
+            {
+                attachedSubnetIds.AddRange(fromRouteTable);
+            }
+            if (routeTableToSubnetIds.TryGetValue(rt.Id, out var fromSubnetRefs))
+            {
+                attachedSubnetIds.AddRange(fromSubnetRefs);
+            }
+            attachedSubnetIds = attachedSubnetIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (attachedSubnetIds.Count == 0) continue;
 
             foreach (var route in routes.OfType<JObject>())
             {
@@ -231,10 +316,10 @@ public class TopologyService : ITopologyService
                 var nextHopType = routeProps?["nextHopType"]?.ToString() ?? "Unknown";
                 var nextHopIp = routeProps?["nextHopIpAddress"]?.ToString() ?? string.Empty;
                 var routeName = route["name"]?.ToString() ?? "default";
+                hasDefaultRoute = true;
 
-                foreach (var subnetRef in attachedSubnets.OfType<JObject>())
+                foreach (var subnetId in attachedSubnetIds)
                 {
-                    var subnetId = subnetRef["id"]?.ToString();
                     if (string.IsNullOrEmpty(subnetId)) continue;
                     Emit(new FlowEdge(
                         Id: $"defaultroute|{subnetId}|{rt.Id}|{routeName}",
@@ -250,7 +335,28 @@ public class TopologyService : ITopologyService
                             ["routeName"] = routeName,
                         }));
                 }
+
+                // Show the egress destination as a first-class node so users can
+                // visually follow VM -> subnet -> route table -> Internet.
+                Emit(new FlowEdge(
+                    Id: $"defaultroute|{rt.Id}|{InternetNodeId}|{routeName}",
+                    Source: rt.Id,
+                    Target: InternetNodeId,
+                    Label: $"default egress ({nextHopType})",
+                    Category: FlowEdgeCategory.DefaultRoute,
+                    Metadata: new Dictionary<string, string>
+                    {
+                        ["addressPrefix"] = "0.0.0.0/0",
+                        ["nextHopType"] = nextHopType,
+                        ["nextHopIpAddress"] = nextHopIp,
+                        ["routeName"] = routeName,
+                    }));
             }
+        }
+
+        if (hasDefaultRoute)
+        {
+            EnsureInternetNode(resources);
         }
 
         return edges;
@@ -413,6 +519,28 @@ public class TopologyService : ITopologyService
                 }
                 set.Add(subnetId);
             }
+        }
+
+        return index;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildRouteTableSubnetIndex(List<AzureResource> resources)
+    {
+        var index = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var subnet in resources.Where(r =>
+                     string.Equals(r.Type, "Microsoft.Network/virtualNetworks/subnets", StringComparison.OrdinalIgnoreCase)))
+        {
+            var routeTableId = TryGetReferenceId(subnet.Properties, "routeTable")
+                ?? TryGetString(subnet.Properties, "routeTableId");
+            if (string.IsNullOrWhiteSpace(routeTableId)) continue;
+
+            if (!index.TryGetValue(routeTableId, out var set))
+            {
+                set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                index[routeTableId] = set;
+            }
+            set.Add(subnet.Id);
         }
 
         return index;

@@ -21,6 +21,7 @@ import { useManualSubscriptions, isValidSubscriptionId } from '@/hooks/useManual
 import type { AzureResource, FlowEdge as ApiFlowEdge, FlowNode as ApiFlowNode } from '@/types/azure'
 
 const nodeTypes = { azureResource: DiscoveryResourceNode }
+const INTERNET_NODE_ID = 'easyazure://internet'
 
 /**
  * Visual treatment per backend edge category. Default routes are always rendered
@@ -85,6 +86,7 @@ export default function DiscoveryView() {
   const [nodes, setNodes, onNodesChange] = useNodesState<AzureResource>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [selectedResource, setSelectedResource] = useState<AzureResource | null>(null)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [apiSubs, setApiSubs] = useState<{ id: string; displayName: string }[]>([])
   const manual = useManualSubscriptions()
@@ -175,6 +177,61 @@ export default function DiscoveryView() {
     }
     return `${selectedSubIds.length} subscriptions selected`
   }, [selectedSubIds, subscriptions])
+
+  const renderedEdges = useMemo(() => {
+    if (!selectedNodeId || selectedResource?.type.toLowerCase() !== 'microsoft.compute/virtualmachines') {
+      return edges
+    }
+
+    const outgoing = new Map<string, Edge[]>()
+    for (const e of edges) {
+      const list = outgoing.get(e.source) ?? []
+      list.push(e)
+      outgoing.set(e.source, list)
+    }
+
+    const allowed = new Set(['associatedWith', 'route', 'default-route'])
+    const edgeInPath = new Set<string>()
+    const seenNodes = new Set<string>([selectedNodeId])
+    const queue: string[] = [selectedNodeId]
+
+    while (queue.length > 0) {
+      const nodeId = queue.shift()!
+      const out = outgoing.get(nodeId) ?? []
+      for (const e of out) {
+        const category = (e.data as { category?: string } | undefined)?.category
+        if (!allowed.has(category ?? '')) continue
+        edgeInPath.add(e.id)
+        if (!seenNodes.has(e.target)) {
+          seenNodes.add(e.target)
+          queue.push(e.target)
+        }
+      }
+      if (seenNodes.has(INTERNET_NODE_ID)) break
+    }
+
+    if (edgeInPath.size === 0) return edges
+
+    return edges.map((e) => {
+      const highlight = edgeInPath.has(e.id)
+      const style = e.style ?? {}
+      const labelStyle = e.labelStyle ?? {}
+
+      return {
+        ...e,
+        animated: highlight ? true : e.animated,
+        style: {
+          ...style,
+          opacity: highlight ? 1 : 0.16,
+          strokeWidth: highlight ? Math.max(Number(style.strokeWidth ?? 2), 2.5) : Number(style.strokeWidth ?? 1.5),
+        },
+        labelStyle: {
+          ...labelStyle,
+          opacity: highlight ? 1 : 0.35,
+        },
+      }
+    })
+  }, [edges, selectedNodeId, selectedResource])
 
   return (
     <div className="flex h-full gap-4">
@@ -295,12 +352,15 @@ export default function DiscoveryView() {
         <div className="flex-1 bg-white border border-gray-200 rounded-xl overflow-hidden">
           <ReactFlow
             nodes={nodes}
-            edges={edges}
+            edges={renderedEdges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
-            onNodeClick={(_, node) => setSelectedResource(node.data as AzureResource)}
+            onNodeClick={(_, node) => {
+              setSelectedNodeId(node.id)
+              setSelectedResource(node.data as AzureResource)
+            }}
             fitView
           >
             <Background />
@@ -318,7 +378,13 @@ export default function DiscoveryView() {
         </div>
       </div>
       {selectedResource && (
-        <ResourcePanel resource={selectedResource} onClose={() => setSelectedResource(null)} />
+        <ResourcePanel
+          resource={selectedResource}
+          onClose={() => {
+            setSelectedResource(null)
+            setSelectedNodeId(null)
+          }}
+        />
       )}
       {replicateOpen && (
         <ReplicateDialog
