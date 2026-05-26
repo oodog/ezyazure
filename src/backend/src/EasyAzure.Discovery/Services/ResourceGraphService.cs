@@ -156,7 +156,8 @@ public class ResourceGraphService
         {
             if (row is not Newtonsoft.Json.Linq.JObject obj) continue;
 
-            var properties = obj["properties"]?.ToObject<Dictionary<string, object>>() ?? [];
+            var properties = NormalizeJTokenToNative(obj["properties"]) as Dictionary<string, object>
+                ?? new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
 
             // Promote any sibling string columns (e.g. addressPrefixFlat, nsgIdFlat)
             // into the properties dictionary so the topology + UI layers can read them
@@ -200,5 +201,51 @@ public class ResourceGraphService
             });
         }
         return result;
+    }
+
+    /// <summary>
+    /// Recursively converts a Newtonsoft <see cref="Newtonsoft.Json.Linq.JToken"/> hierarchy
+    /// into native .NET types (Dictionary, List, string, long, double, bool, null) so that
+    /// System.Text.Json can serialize them correctly. Without this, JObject/JArray values in
+    /// <see cref="AzureResource.Properties"/> serialize as empty <c>{}</c> or <c>[]</c>.
+    /// </summary>
+    public static object? NormalizeJTokenToNative(Newtonsoft.Json.Linq.JToken? token)
+    {
+        if (token is null || token.Type == Newtonsoft.Json.Linq.JTokenType.Null)
+            return null;
+
+        switch (token)
+        {
+            case Newtonsoft.Json.Linq.JObject jObj:
+                var dict = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                foreach (var prop in jObj.Properties())
+                {
+                    var val = NormalizeJTokenToNative(prop.Value);
+                    if (val is not null) dict[prop.Name] = val;
+                }
+                return dict;
+
+            case Newtonsoft.Json.Linq.JArray jArr:
+                var list = new List<object>();
+                foreach (var item in jArr)
+                {
+                    var val = NormalizeJTokenToNative(item);
+                    if (val is not null) list.Add(val);
+                }
+                return list;
+
+            case Newtonsoft.Json.Linq.JValue jVal:
+                return jVal.Type switch
+                {
+                    Newtonsoft.Json.Linq.JTokenType.String => jVal.ToObject<string>(),
+                    Newtonsoft.Json.Linq.JTokenType.Integer => jVal.ToObject<long>(),
+                    Newtonsoft.Json.Linq.JTokenType.Float => jVal.ToObject<double>(),
+                    Newtonsoft.Json.Linq.JTokenType.Boolean => jVal.ToObject<bool>(),
+                    _ => jVal.ToString(),
+                };
+
+            default:
+                return token.ToString();
+        }
     }
 }

@@ -131,7 +131,10 @@ public class TopologyService : ITopologyService
                 // ARM is authoritative for subnet shape — overwrite even when the
                 // existing key has a value, because that value may be the broken
                 // ARG shape (e.g. id: []).
-                dict[prop.Name] = prop.Value;
+                // Convert JToken to native .NET types so System.Text.Json can
+                // serialize them correctly (STJ doesn't know Newtonsoft JToken).
+                var native = ResourceGraphService.NormalizeJTokenToNative(prop.Value);
+                if (native is not null) dict[prop.Name] = native;
             }
 
             // Flatten high-value fields so edge builders that look for flat ID
@@ -143,7 +146,8 @@ public class TopologyService : ITopologyService
             }
             if (armProps["addressPrefixes"] is JArray apArr && apArr.Count > 0)
             {
-                dict["addressPrefixes"] = apArr;
+                var native = ResourceGraphService.NormalizeJTokenToNative(apArr);
+                if (native is not null) dict["addressPrefixes"] = native;
             }
             if ((armProps["networkSecurityGroup"] as JObject)?["id"] is JValue { Type: JTokenType.String } nsgJv)
             {
@@ -238,7 +242,7 @@ public class TopologyService : ITopologyService
 
             var dict = new Dictionary<string, object>(vm.Properties, StringComparer.OrdinalIgnoreCase)
             {
-                ["privateIPAddresses"] = new JArray(ips.Distinct(StringComparer.OrdinalIgnoreCase)),
+                ["privateIPAddresses"] = ips.Distinct(StringComparer.OrdinalIgnoreCase).ToList<object>(),
             };
             resources[i] = new AzureResource
             {
@@ -369,7 +373,8 @@ public class TopologyService : ITopologyService
                 if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(name)) continue;
 
                 var props = item["properties"] as JObject ?? [];
-                var dict = props.ToObject<Dictionary<string, object>>() ?? [];
+                var dict = ResourceGraphService.NormalizeJTokenToNative(props) as Dictionary<string, object>
+                    ?? new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
                 // Flatten high-value fields so the frontend can display subnet details
                 // without deep JSON parsing assumptions.
                 var addressPrefix = (props["addressPrefix"] as JValue)?.Value<string>();
@@ -377,8 +382,12 @@ public class TopologyService : ITopologyService
 
                 if (props["addressPrefixes"] is JArray prefixes && prefixes.Count > 0)
                 {
-                    var clean = new JArray(prefixes.OfType<JValue>()
-                        .Where(v => v.Type == JTokenType.String && !string.IsNullOrWhiteSpace(v.Value<string>())));
+                    var clean = new List<object>();
+                    foreach (var v in prefixes.OfType<JValue>()
+                        .Where(v => v.Type == JTokenType.String && !string.IsNullOrWhiteSpace(v.Value<string>())))
+                    {
+                        clean.Add(v.Value<string>()!);
+                    }
                     if (clean.Count > 0) dict["addressPrefixes"] = clean;
                 }
 
@@ -679,6 +688,24 @@ public class TopologyService : ITopologyService
                     Category: FlowEdgeCategory.Contains));
             }
         }
+        // Also handle native list shape (after NormalizeJTokenToNative)
+        else if (TryGetValueCaseInsensitive(vnet.Properties, "subnets", out var sVal) && sVal is IList<object> nativeSubnets)
+        {
+            foreach (var item in nativeSubnets)
+            {
+                if (item is IDictionary<string, object> d &&
+                    TryGetValueCaseInsensitive(d, "id", out var idObj) && idObj is string id &&
+                    !string.IsNullOrEmpty(id))
+                {
+                    emit(new FlowEdge(
+                        Id: $"contains|{vnet.Id}|{id}",
+                        Source: vnet.Id,
+                        Target: id,
+                        Label: "contains",
+                        Category: FlowEdgeCategory.Contains));
+                }
+            }
+        }
 
         // VNet ↔ VNet peering
         if (TryGetJArray(vnet.Properties, "virtualNetworkPeerings", out var peerings))
@@ -907,6 +934,13 @@ public class TopologyService : ITopologyService
                 _ => null,
             };
         }
+        else if (value is Dictionary<string, object> nativeDict)
+        {
+            if (TryGetValueCaseInsensitive(nativeDict, "id", out var nId) && nId is string nIdStr
+                && !string.IsNullOrWhiteSpace(nIdStr) && nIdStr.StartsWith("/", StringComparison.Ordinal))
+                return nIdStr;
+            return null;
+        }
 
         if (idToken is JValue jvId && jvId.Type == JTokenType.String)
         {
@@ -965,6 +999,25 @@ public class TopologyService : ITopologyService
                             ids.Add(id);
                         break;
                     }
+            }
+        }
+
+        // Also handle native Dictionary items (from NormalizeJTokenToNative).
+        if (ids.Count == 0 && TryGetValueCaseInsensitive(dict, key, out var rawVal) && rawVal is IList<object> nativeList)
+        {
+            foreach (var item in nativeList)
+            {
+                if (item is IDictionary<string, object> d &&
+                    TryGetValueCaseInsensitive(d, "id", out var idObj) &&
+                    idObj is string idStr &&
+                    !string.IsNullOrWhiteSpace(idStr) && idStr.StartsWith("/", StringComparison.Ordinal))
+                {
+                    ids.Add(idStr);
+                }
+                else if (item is string s && !string.IsNullOrWhiteSpace(s) && s.StartsWith("/", StringComparison.Ordinal))
+                {
+                    ids.Add(s);
+                }
             }
         }
 
