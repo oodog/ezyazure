@@ -107,6 +107,12 @@ public class ResourceGraphService
             "Resources | where type =~ 'Microsoft.Network/routeTables' | project id, name, type, location, resourceGroup, subscriptionId, properties, tags",
             [subscriptionId], ct);
 
+    public Task<IReadOnlyList<AzureResource>> GetFirewallsAsync(
+        string subscriptionId, CancellationToken ct = default) =>
+        QueryAsync(
+            "Resources | where type =~ 'Microsoft.Network/azureFirewalls' | project id, name, type, location, resourceGroup, subscriptionId, properties, tags",
+            [subscriptionId], ct);
+
     /// <summary>
     /// Direct ARM REST GET against a subnet (or any) resource. Resource Graph sometimes
     /// omits subnet properties such as addressPrefix when subnets are IPAM-managed or

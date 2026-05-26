@@ -111,6 +111,7 @@ export function getVmPrivateIps(resource: AzureResource): string[] {
   const allowedTypes = [
     'microsoft.compute/virtualmachines',
     'microsoft.network/privateendpoints',
+    'microsoft.network/azurefirewalls',
   ]
   if (!allowedTypes.includes(resource.type.toLowerCase())) return []
   const props = resource.properties ?? {}

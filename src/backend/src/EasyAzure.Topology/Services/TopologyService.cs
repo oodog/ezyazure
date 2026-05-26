@@ -49,6 +49,7 @@ public class TopologyService : ITopologyService
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetRouteTablesAsync(subscriptionId, ct), "RouteTables", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetVMsAsync(subscriptionId, ct), "VMs", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetPrivateEndpointsAsync(subscriptionId, ct), "PrivateEndpoints", subscriptionId));
+            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetFirewallsAsync(subscriptionId, ct), "Firewalls", subscriptionId));
             networkInterfaces.AddRange(await SafeCollectAsync(() => _resourceGraph.GetNetworkInterfacesAsync(subscriptionId, ct), "NICs", subscriptionId));
         }
 
@@ -63,6 +64,7 @@ public class TopologyService : ITopologyService
         allResources = ConsolidateResources(allResources);
         await EnrichSubnetsFromArmAsync(allResources, ct);
         EnrichVmPrivateIps(allResources, networkInterfaces);
+        EnrichFirewallPrivateIps(allResources);
         EnsureInternetNode(allResources);
 
         var nodes = BuildNodes(allResources);
@@ -183,6 +185,60 @@ public class TopologyService : ITopologyService
             {
                 resources[i] = updated;
             }
+        }
+    }
+
+    /// <summary>
+    /// Extracts private IP addresses from Azure Firewall ipConfigurations and stores
+    /// them as <c>properties.privateIPAddresses</c> so the frontend can display them.
+    /// </summary>
+    private static void EnrichFirewallPrivateIps(List<AzureResource> resources)
+    {
+        for (var i = 0; i < resources.Count; i++)
+        {
+            var fw = resources[i];
+            if (!string.Equals(fw.Type, "Microsoft.Network/azureFirewalls", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!TryGetValueCaseInsensitive(fw.Properties, "ipConfigurations", out var ipCfgVal) || ipCfgVal is null)
+                continue;
+
+            IEnumerable<object>? items = null;
+            if (ipCfgVal is JArray ja) items = ja;
+            else if (ipCfgVal is IList<object> nativeList) items = nativeList;
+            if (items is null) continue;
+
+            var ips = new List<string>();
+            foreach (var item in items)
+            {
+                string? ip = null;
+                if (item is JObject jo)
+                    ip = (jo["properties"] as JObject)?["privateIPAddress"]?.ToString();
+                else if (item is IDictionary<string, object> d &&
+                         TryGetValueCaseInsensitive(d, "properties", out var pVal) &&
+                         pVal is IDictionary<string, object> pDict &&
+                         TryGetValueCaseInsensitive(pDict, "privateIPAddress", out var ipVal))
+                    ip = ipVal as string;
+                if (!string.IsNullOrWhiteSpace(ip)) ips.Add(ip!);
+            }
+
+            if (ips.Count == 0) continue;
+
+            var dict = new Dictionary<string, object>(fw.Properties, StringComparer.OrdinalIgnoreCase)
+            {
+                ["privateIPAddresses"] = ips.Distinct(StringComparer.OrdinalIgnoreCase).ToList<object>(),
+            };
+            resources[i] = new AzureResource
+            {
+                Id = fw.Id,
+                Name = fw.Name,
+                Type = fw.Type,
+                Location = fw.Location,
+                ResourceGroup = fw.ResourceGroup,
+                SubscriptionId = fw.SubscriptionId,
+                Properties = dict,
+                Tags = fw.Tags,
+            };
         }
     }
 
@@ -607,9 +663,10 @@ public class TopologyService : ITopologyService
         "microsoft.network/virtualnetworks/subnets" => 1,
         "microsoft.network/networksecuritygroups" => 2,
         "microsoft.network/routetables" => 2,
-        "microsoft.network/privateendpoints" => 3,
-        "microsoft.compute/virtualmachines" => 3,
-        _ => 4,
+        "microsoft.network/azurefirewalls" => 3,
+        "microsoft.network/privateendpoints" => 4,
+        "microsoft.compute/virtualmachines" => 4,
+        _ => 5,
     };
 
     private static List<FlowEdge> BuildEdges(List<AzureResource> resources, List<AzureResource> networkInterfaces)
@@ -624,6 +681,7 @@ public class TopologyService : ITopologyService
         var routeTables = resources
             .Where(r => r.Type.Equals("Microsoft.Network/routeTables", StringComparison.OrdinalIgnoreCase))
             .ToList();
+        var firewallIpIndex = BuildFirewallPrivateIpIndex(resources);
 
         void Emit(FlowEdge e)
         {
@@ -708,20 +766,53 @@ public class TopologyService : ITopologyService
                 }
 
                 // Show the egress destination as a first-class node so users can
-                // visually follow VM -> subnet -> route table -> Internet.
-                Emit(new FlowEdge(
-                    Id: $"defaultroute|{rt.Id}|{InternetNodeId}|{routeName}",
-                    Source: rt.Id,
-                    Target: InternetNodeId,
-                    Label: $"default egress ({nextHopType})",
-                    Category: FlowEdgeCategory.DefaultRoute,
-                    Metadata: new Dictionary<string, string>
-                    {
-                        ["addressPrefix"] = "0.0.0.0/0",
-                        ["nextHopType"] = nextHopType,
-                        ["nextHopIpAddress"] = nextHopIp,
-                        ["routeName"] = routeName,
-                    }));
+                // visually follow VM -> subnet -> route table -> (firewall) -> Internet.
+                // When nextHopType is VirtualAppliance and the IP matches a discovered
+                // firewall, route the edge through the firewall node.
+                if (!string.IsNullOrWhiteSpace(nextHopIp) && firewallIpIndex.TryGetValue(nextHopIp, out var fwId))
+                {
+                    Emit(new FlowEdge(
+                        Id: $"defaultroute|{rt.Id}|{fwId}|{routeName}",
+                        Source: rt.Id,
+                        Target: fwId,
+                        Label: $"0.0.0.0/0 → {nextHopIp}",
+                        Category: FlowEdgeCategory.DefaultRoute,
+                        Metadata: new Dictionary<string, string>
+                        {
+                            ["addressPrefix"] = "0.0.0.0/0",
+                            ["nextHopType"] = nextHopType,
+                            ["nextHopIpAddress"] = nextHopIp,
+                            ["routeName"] = routeName,
+                        }));
+                    Emit(new FlowEdge(
+                        Id: $"defaultroute|{fwId}|{InternetNodeId}|{routeName}",
+                        Source: fwId,
+                        Target: InternetNodeId,
+                        Label: "egress (Internet)",
+                        Category: FlowEdgeCategory.DefaultRoute,
+                        Metadata: new Dictionary<string, string>
+                        {
+                            ["addressPrefix"] = "0.0.0.0/0",
+                            ["nextHopType"] = "Internet",
+                            ["routeName"] = routeName,
+                        }));
+                }
+                else
+                {
+                    Emit(new FlowEdge(
+                        Id: $"defaultroute|{rt.Id}|{InternetNodeId}|{routeName}",
+                        Source: rt.Id,
+                        Target: InternetNodeId,
+                        Label: $"default egress ({nextHopType})",
+                        Category: FlowEdgeCategory.DefaultRoute,
+                        Metadata: new Dictionary<string, string>
+                        {
+                            ["addressPrefix"] = "0.0.0.0/0",
+                            ["nextHopType"] = nextHopType,
+                            ["nextHopIpAddress"] = nextHopIp,
+                            ["routeName"] = routeName,
+                        }));
+                }
             }
         }
 
@@ -981,6 +1072,48 @@ public class TopologyService : ITopologyService
                 index[routeTableId] = set;
             }
             set.Add(subnet.Id);
+        }
+
+        return index;
+    }
+
+    /// <summary>
+    /// Builds a mapping from firewall private IP address → firewall resource ID.
+    /// Azure Firewall exposes its private IP in properties.ipConfigurations[].properties.privateIPAddress.
+    /// </summary>
+    private static Dictionary<string, string> BuildFirewallPrivateIpIndex(List<AzureResource> resources)
+    {
+        var index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var fw in resources.Where(r =>
+                     string.Equals(r.Type, "Microsoft.Network/azureFirewalls", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (!TryGetValueCaseInsensitive(fw.Properties, "ipConfigurations", out var ipCfgVal) || ipCfgVal is null)
+                continue;
+
+            IEnumerable<object>? items = null;
+            if (ipCfgVal is JArray ja) items = ja;
+            else if (ipCfgVal is IList<object> nativeList) items = nativeList;
+            if (items is null) continue;
+
+            foreach (var item in items)
+            {
+                string? ip = null;
+                if (item is JObject jo)
+                {
+                    ip = (jo["properties"] as JObject)?["privateIPAddress"]?.ToString();
+                }
+                else if (item is IDictionary<string, object> d &&
+                         TryGetValueCaseInsensitive(d, "properties", out var pVal) &&
+                         pVal is IDictionary<string, object> pDict &&
+                         TryGetValueCaseInsensitive(pDict, "privateIPAddress", out var ipVal))
+                {
+                    ip = ipVal as string;
+                }
+
+                if (!string.IsNullOrWhiteSpace(ip))
+                    index[ip!] = fw.Id;
+            }
         }
 
         return index;
