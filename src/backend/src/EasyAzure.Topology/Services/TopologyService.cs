@@ -61,6 +61,7 @@ public class TopologyService : ITopologyService
         // with different property depths. Merge them by ID so edges and details use
         // the richest available shape.
         allResources = ConsolidateResources(allResources);
+        await EnrichMissingSubnetPrefixesAsync(allResources, ct);
         EnsureInternetNode(allResources);
 
         var nodes = BuildNodes(allResources);
@@ -98,6 +99,104 @@ public class TopologyService : ITopologyService
     /// Lifts each VNet's <c>properties.subnets[]</c> into its own
     /// <see cref="AzureResource"/> node (type <c>Microsoft.Network/virtualNetworks/subnets</c>).
     /// </summary>
+    private async Task EnrichMissingSubnetPrefixesAsync(List<AzureResource> resources, CancellationToken ct)
+    {
+        // Some subnets (notably IPAM-managed or freshly created ones) are returned by
+        // Azure Resource Graph without addressPrefix / addressPrefixes populated.
+        // For each of those we fetch the authoritative shape directly from ARM.
+        var subnetsNeedingArm = resources
+            .Where(r => string.Equals(r.Type, "Microsoft.Network/virtualNetworks/subnets", StringComparison.OrdinalIgnoreCase))
+            .Where(s => !HasCidr(s.Properties))
+            .ToList();
+
+        if (subnetsNeedingArm.Count == 0) return;
+
+        _logger.LogInformation(
+            "Falling back to ARM REST for {Count} subnet(s) missing addressPrefix",
+            subnetsNeedingArm.Count);
+
+        var byId = resources.ToDictionary(r => r.Id, StringComparer.OrdinalIgnoreCase);
+
+        var fetches = subnetsNeedingArm.Select(async s =>
+        {
+            var arm = await _resourceGraph.GetArmResourceAsync(s.Id, "2024-05-01", ct);
+            if (arm is null) return;
+            var armProps = arm["properties"] as JObject;
+            if (armProps is null) return;
+
+            if (byId.TryGetValue(s.Id, out var current))
+            {
+                var dict = new Dictionary<string, object>(current.Properties, StringComparer.OrdinalIgnoreCase);
+                foreach (var prop in armProps.Properties())
+                {
+                    if (prop.Value is null || prop.Value.Type == JTokenType.Null) continue;
+                    dict[prop.Name] = prop.Value;
+                }
+                if (armProps["addressPrefix"] is JValue { Type: JTokenType.String } apJv)
+                {
+                    var ap = apJv.Value<string>();
+                    if (!string.IsNullOrWhiteSpace(ap)) dict["addressPrefix"] = ap;
+                }
+                if (armProps["addressPrefixes"] is JArray apArr && apArr.Count > 0)
+                {
+                    dict["addressPrefixes"] = apArr;
+                }
+
+                byId[s.Id] = new AzureResource
+                {
+                    Id = current.Id,
+                    Name = current.Name,
+                    Type = current.Type,
+                    Location = current.Location,
+                    ResourceGroup = current.ResourceGroup,
+                    SubscriptionId = current.SubscriptionId,
+                    Properties = dict,
+                    Tags = current.Tags,
+                };
+            }
+        }).ToArray();
+
+        await Task.WhenAll(fetches);
+
+        for (var i = 0; i < resources.Count; i++)
+        {
+            if (byId.TryGetValue(resources[i].Id, out var updated))
+            {
+                resources[i] = updated;
+            }
+        }
+    }
+
+    private static bool HasCidr(IDictionary<string, object> properties)
+    {
+        if (TryGetValueCaseInsensitive(properties, "addressPrefix", out var ap) &&
+            ap is JValue { Type: JTokenType.String } apJv &&
+            !string.IsNullOrWhiteSpace(apJv.Value<string>()))
+        {
+            return true;
+        }
+        if (TryGetValueCaseInsensitive(properties, "addressPrefix", out var apStr) &&
+            apStr is string apS && !string.IsNullOrWhiteSpace(apS))
+        {
+            return true;
+        }
+        if (TryGetValueCaseInsensitive(properties, "addressPrefixes", out var apx) &&
+            apx is JArray apxArr && apxArr.OfType<JValue>().Any(v => v.Type == JTokenType.String && !string.IsNullOrWhiteSpace(v.Value<string>())))
+        {
+            return true;
+        }
+
+        try
+        {
+            var serialized = Newtonsoft.Json.JsonConvert.SerializeObject(properties);
+            return System.Text.RegularExpressions.Regex.IsMatch(serialized, @"\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}");
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static List<AzureResource> PromoteSubnets(List<AzureResource> resources)
     {
         var subnets = new List<AzureResource>();

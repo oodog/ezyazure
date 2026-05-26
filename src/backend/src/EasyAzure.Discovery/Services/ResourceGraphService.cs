@@ -107,6 +107,45 @@ public class ResourceGraphService
             "Resources | where type =~ 'Microsoft.Network/routeTables' | project id, name, type, location, resourceGroup, subscriptionId, properties, tags",
             [subscriptionId], ct);
 
+    /// <summary>
+    /// Direct ARM REST GET against a subnet (or any) resource. Resource Graph sometimes
+    /// omits subnet properties such as addressPrefix when subnets are IPAM-managed or
+    /// freshly created — this gives us the authoritative property bag from ARM itself.
+    /// </summary>
+    public async Task<Newtonsoft.Json.Linq.JObject?> GetArmResourceAsync(
+        string resourceId, string apiVersion, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(resourceId) || !resourceId.StartsWith("/", StringComparison.Ordinal))
+            return null;
+
+        try
+        {
+            var credential = new AzureIdentity::Azure.Identity.DefaultAzureCredential();
+            var token = await credential.GetTokenAsync(
+                new Azure.Core.TokenRequestContext(["https://management.azure.com/.default"]), ct);
+
+            using var http = new HttpClient { BaseAddress = new Uri("https://management.azure.com") };
+            http.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token.Token);
+
+            var url = $"{resourceId}?api-version={apiVersion}";
+            using var resp = await http.GetAsync(url, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.LogDebug("ARM GET {Url} returned {Status}", url, (int)resp.StatusCode);
+                return null;
+            }
+
+            var json = await resp.Content.ReadAsStringAsync(ct);
+            return Newtonsoft.Json.Linq.JObject.Parse(json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ARM REST GET failed for {ResourceId}", resourceId);
+            return null;
+        }
+    }
+
     private static IReadOnlyList<AzureResource> ParseQueryResult(QueryResponse response)
     {
         if (response.Data is not Newtonsoft.Json.Linq.JArray rows)
