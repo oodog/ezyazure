@@ -68,13 +68,13 @@ public class ResourceGraphService
     public Task<IReadOnlyList<AzureResource>> GetVNetsAsync(
         string subscriptionId, CancellationToken ct = default) =>
         QueryAsync(
-            "Resources | where type =~ 'Microsoft.Network/virtualNetworks' | project id, name, type, location, resourceGroup, subscriptionId, properties, tags",
+            "Resources | where type =~ 'Microsoft.Network/virtualNetworks' | extend addressPrefixesJson = tostring(properties.addressSpace.addressPrefixes), dnsServersJson = tostring(properties.dhcpOptions.dnsServers) | project id, name, type, location, resourceGroup, subscriptionId, properties, tags, addressPrefixesJson, dnsServersJson",
             [subscriptionId], ct);
 
     public Task<IReadOnlyList<AzureResource>> GetSubnetsAsync(
         string subscriptionId, CancellationToken ct = default) =>
         QueryAsync(
-            "Resources | where type =~ 'Microsoft.Network/virtualNetworks' | mv-expand subnet = properties.subnets | project id = tostring(subnet.id), name = tostring(subnet.name), type = 'Microsoft.Network/virtualNetworks/subnets', location, resourceGroup, subscriptionId, properties = subnet.properties, tags",
+            "Resources | where type =~ 'Microsoft.Network/virtualNetworks/subnets' | extend addressPrefix = tostring(properties.addressPrefix), addressPrefixesJson = tostring(properties.addressPrefixes), networkSecurityGroupId = tostring(properties.networkSecurityGroup.id), routeTableId = tostring(properties.routeTable.id) | project id, name, type, location, resourceGroup, subscriptionId, properties, tags, addressPrefix, addressPrefixesJson, networkSecurityGroupId, routeTableId",
             [subscriptionId], ct);
 
     public Task<IReadOnlyList<AzureResource>> GetNSGsAsync(
@@ -117,6 +117,37 @@ public class ResourceGraphService
         {
             if (row is not Newtonsoft.Json.Linq.JObject obj) continue;
 
+            var properties = obj["properties"]?.ToObject<Dictionary<string, object>>() ?? [];
+
+            // Promote any sibling string columns (e.g. addressPrefixFlat, nsgIdFlat)
+            // into the properties dictionary so the topology + UI layers can read them
+            // even when Resource Graph returns a malformed nested shape (e.g. id: []).
+            foreach (var prop in obj.Properties())
+            {
+                var name = prop.Name;
+                if (name.Equals("id", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("name", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("type", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("location", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("resourceGroup", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("subscriptionId", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("properties", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("tags", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (prop.Value is Newtonsoft.Json.Linq.JValue jv &&
+                    jv.Type == Newtonsoft.Json.Linq.JTokenType.String)
+                {
+                    var s = jv.ToString();
+                    if (!string.IsNullOrWhiteSpace(s) && s != "[]" && s != "{}")
+                    {
+                        properties[name] = s;
+                    }
+                }
+            }
+
             result.Add(new AzureResource
             {
                 Id = obj["id"]?.ToString() ?? string.Empty,
@@ -125,7 +156,7 @@ public class ResourceGraphService
                 Location = obj["location"]?.ToString() ?? string.Empty,
                 ResourceGroup = obj["resourceGroup"]?.ToString() ?? string.Empty,
                 SubscriptionId = obj["subscriptionId"]?.ToString() ?? string.Empty,
-                Properties = obj["properties"]?.ToObject<Dictionary<string, object>>() ?? [],
+                Properties = properties,
                 Tags = obj["tags"]?.ToObject<Dictionary<string, string>>() ?? [],
             });
         }

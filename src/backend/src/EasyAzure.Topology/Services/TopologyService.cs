@@ -44,6 +44,7 @@ public class TopologyService : ITopologyService
             // Each collector is wrapped so missing RBAC on a single resource type
             // never blocks the whole topology. Errors are logged + skipped.
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetVNetsAsync(subscriptionId, ct), "VNets", subscriptionId));
+            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetSubnetsAsync(subscriptionId, ct), "Subnets", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetNSGsAsync(subscriptionId, ct), "NSGs", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetRouteTablesAsync(subscriptionId, ct), "RouteTables", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetVMsAsync(subscriptionId, ct), "VMs", subscriptionId));
@@ -113,18 +114,22 @@ public class TopologyService : ITopologyService
                 var dict = props.ToObject<Dictionary<string, object>>() ?? [];
                 // Flatten high-value fields so the frontend can display subnet details
                 // without deep JSON parsing assumptions.
-                var addressPrefix = props["addressPrefix"]?.ToString();
+                var addressPrefix = (props["addressPrefix"] as JValue)?.Value<string>();
                 if (!string.IsNullOrWhiteSpace(addressPrefix)) dict["addressPrefix"] = addressPrefix;
 
-                if (props["addressPrefixes"] is JArray prefixes)
+                if (props["addressPrefixes"] is JArray prefixes && prefixes.Count > 0)
                 {
-                    dict["addressPrefixes"] = prefixes;
+                    var clean = new JArray(prefixes.OfType<JValue>()
+                        .Where(v => v.Type == JTokenType.String && !string.IsNullOrWhiteSpace(v.Value<string>())));
+                    if (clean.Count > 0) dict["addressPrefixes"] = clean;
                 }
 
-                var nsgId = (props["networkSecurityGroup"] as JObject)?["id"]?.ToString();
+                var nsgIdToken = (props["networkSecurityGroup"] as JObject)?["id"];
+                var nsgId = nsgIdToken is JValue { Type: JTokenType.String } nsgJv ? nsgJv.Value<string>() : null;
                 if (!string.IsNullOrWhiteSpace(nsgId)) dict["networkSecurityGroupId"] = nsgId;
 
-                var routeTableId = (props["routeTable"] as JObject)?["id"]?.ToString();
+                var rtIdToken = (props["routeTable"] as JObject)?["id"];
+                var routeTableId = rtIdToken is JValue { Type: JTokenType.String } rtJv ? rtJv.Value<string>() : null;
                 if (!string.IsNullOrWhiteSpace(routeTableId)) dict["routeTableId"] = routeTableId;
 
                 subnets.Add(new AzureResource
@@ -438,10 +443,11 @@ public class TopologyService : ITopologyService
 
     private static void AddSubnetEdges(AzureResource subnet, Dictionary<string, AzureResource> byId, Action<FlowEdge> emit)
     {
-        // Subnet → NSG association
+        // Subnet → NSG association — try nested ref, flat fallback, and tostring()
+        // column projected by Resource Graph (nsgIdFlat).
         var nsgId = TryGetReferenceId(subnet.Properties, "networkSecurityGroup")
             ?? TryGetString(subnet.Properties, "networkSecurityGroupId");
-        if (!string.IsNullOrWhiteSpace(nsgId))
+        if (!string.IsNullOrWhiteSpace(nsgId) && nsgId.StartsWith("/", StringComparison.Ordinal))
         {
             emit(new FlowEdge(
                 Id: $"nsg|{subnet.Id}|{nsgId}",
@@ -454,7 +460,7 @@ public class TopologyService : ITopologyService
         // Subnet → Route Table association
         var rtId = TryGetReferenceId(subnet.Properties, "routeTable")
             ?? TryGetString(subnet.Properties, "routeTableId");
-        if (!string.IsNullOrWhiteSpace(rtId))
+        if (!string.IsNullOrWhiteSpace(rtId) && rtId.StartsWith("/", StringComparison.Ordinal))
         {
             emit(new FlowEdge(
                 Id: $"udr|{subnet.Id}|{rtId}",
@@ -632,14 +638,22 @@ public class TopologyService : ITopologyService
     {
         if (!TryGetValueCaseInsensitive(dict, key, out var value) || value is null) return null;
 
-        if (value is JObject jo)
+        JToken? idToken = null;
+        if (value is JObject jo) idToken = jo["id"];
+        else if (value is IDictionary<string, object> idict && TryGetValueCaseInsensitive(idict, "id", out var idVal))
         {
-            return jo["id"]?.ToString();
+            return idVal switch
+            {
+                string s when !string.IsNullOrWhiteSpace(s) && s.StartsWith("/", StringComparison.Ordinal) => s,
+                JValue jv when jv.Type == JTokenType.String && (jv.Value<string>()?.StartsWith("/", StringComparison.Ordinal) ?? false) => jv.Value<string>(),
+                _ => null,
+            };
         }
 
-        if (value is IDictionary<string, object> idict)
+        if (idToken is JValue jvId && jvId.Type == JTokenType.String)
         {
-            return TryGetString(idict, "id");
+            var s = jvId.Value<string>();
+            return !string.IsNullOrWhiteSpace(s) && s.StartsWith("/", StringComparison.Ordinal) ? s : null;
         }
 
         return null;
@@ -675,14 +689,22 @@ public class TopologyService : ITopologyService
             {
                 case JObject jo:
                     {
-                        var id = jo["id"]?.ToString();
-                        if (!string.IsNullOrWhiteSpace(id)) ids.Add(id);
+                        // Only accept a real ARM resource id ("/subscriptions/..."),
+                        // rejecting malformed shapes such as { id: [] } that Resource
+                        // Graph occasionally returns for empty references.
+                        if (jo["id"] is JValue { Type: JTokenType.String } jv)
+                        {
+                            var id = jv.Value<string>();
+                            if (!string.IsNullOrWhiteSpace(id) && id.StartsWith("/", StringComparison.Ordinal))
+                                ids.Add(id);
+                        }
                         break;
                     }
                 case JValue jv when jv.Type == JTokenType.String:
                     {
-                        var id = jv.ToString();
-                        if (!string.IsNullOrWhiteSpace(id)) ids.Add(id);
+                        var id = jv.Value<string>();
+                        if (!string.IsNullOrWhiteSpace(id) && id.StartsWith("/", StringComparison.Ordinal))
+                            ids.Add(id);
                         break;
                     }
             }
