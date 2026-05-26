@@ -12,11 +12,64 @@ interface Props {
   onClose: () => void
 }
 
+function toDisplay(value: unknown): string {
+  if (value === null || value === undefined) return '—'
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function flattenProperties(value: unknown, prefix = '', depth = 0, out: Array<{ key: string; value: unknown }> = []) {
+  if (depth > 3) {
+    out.push({ key: prefix || 'value', value })
+    return out
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      out.push({ key: prefix || 'value', value: [] })
+      return out
+    }
+    const primitiveArray = value.every((v) => typeof v !== 'object' || v === null)
+    if (primitiveArray) {
+      out.push({ key: prefix || 'value', value })
+      return out
+    }
+    value.forEach((v, i) => flattenProperties(v, `${prefix}[${i}]`, depth + 1, out))
+    return out
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (entries.length === 0) {
+      out.push({ key: prefix || 'value', value: {} })
+      return out
+    }
+    for (const [k, v] of entries) {
+      const nextKey = prefix ? `${prefix}.${k}` : k
+      if (v !== null && typeof v === 'object') {
+        flattenProperties(v, nextKey, depth + 1, out)
+      } else {
+        out.push({ key: nextKey, value: v })
+      }
+    }
+    return out
+  }
+
+  out.push({ key: prefix || 'value', value })
+  return out
+}
+
 export default function ResourcePanel({ resource, onClose }: Props) {
   const vnetPrefixes = getVNetPrefixes(resource)
   const subnetPrefixes = getSubnetPrefixes(resource)
   const dnsServers = getVNetDnsServers(resource)
   const subnetAssoc = getSubnetAssociations(resource)
+  const propertyRows = flattenProperties(resource.properties)
 
   return (
     <aside className="w-80 bg-white border border-gray-200 rounded-xl p-5 shrink-0 overflow-y-auto">
@@ -105,10 +158,16 @@ export default function ResourcePanel({ resource, onClose }: Props) {
         )}
         <div>
           <dt className="text-gray-400 text-xs uppercase tracking-wide mb-1">Properties</dt>
-          <dd>
-            <pre className="text-xs bg-gray-50 rounded p-2 overflow-auto max-h-48">
-              {JSON.stringify(resource.properties, null, 2)}
-            </pre>
+          <dd className="space-y-1.5 max-h-64 overflow-auto pr-1">
+            {propertyRows.length === 0 && (
+              <div className="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-gray-500">No properties</div>
+            )}
+            {propertyRows.map((row) => (
+              <div key={row.key} className="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1.5">
+                <div className="text-[10px] uppercase tracking-wide text-gray-500">{row.key}</div>
+                <div className="mt-0.5 text-gray-800 font-mono break-all">{toDisplay(row.value)}</div>
+              </div>
+            ))}
           </dd>
         </div>
       </dl>

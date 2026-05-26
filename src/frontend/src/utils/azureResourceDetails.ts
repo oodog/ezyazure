@@ -36,6 +36,30 @@ function uniq(values: string[]): string[] {
   return Array.from(new Set(values))
 }
 
+const CIDR_RE = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/
+
+function collectCidrs(value: unknown, out: string[] = [], depth = 0): string[] {
+  if (depth > 8 || value === null || value === undefined) return out
+
+  if (typeof value === 'string') {
+    const v = value.trim()
+    if (CIDR_RE.test(v)) out.push(v)
+    return out
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectCidrs(item, out, depth + 1)
+    return out
+  }
+
+  const obj = asObj(value)
+  if (!obj) return out
+  for (const v of Object.values(obj)) {
+    collectCidrs(v, out, depth + 1)
+  }
+  return out
+}
+
 export function getVNetPrefixes(resource: AzureResource): string[] {
   if (resource.type.toLowerCase() !== 'microsoft.network/virtualnetworks') return []
   const props = resource.properties ?? {}
@@ -62,7 +86,13 @@ export function getVNetPrefixes(resource: AzureResource): string[] {
   }
   scan(p)
 
-  return uniq([...fromAddressSpace, ...fromFlat, ...fromNested])
+  const fromRecursive = collectCidrs(props)
+
+  // Ultra-defensive fallback: parse CIDRs out of stringified JSON for odd token wrappers.
+  const serialized = JSON.stringify(props)
+  const fromSerialized = serialized.match(/(\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2})/g) ?? []
+
+  return uniq([...fromAddressSpace, ...fromFlat, ...fromNested, ...fromRecursive, ...fromSerialized])
 }
 
 export function getSubnetPrefixes(resource: AzureResource): string[] {
@@ -71,7 +101,10 @@ export function getSubnetPrefixes(resource: AzureResource): string[] {
   const p = props as Obj
   const one = asStr(getCI(p, 'addressPrefix'))
   const many = asStrList(getCI(p, 'addressPrefixes'))
-  return uniq([...(one ? [one] : []), ...many])
+  const fromRecursive = collectCidrs(props)
+  const serialized = JSON.stringify(props)
+  const fromSerialized = serialized.match(/(\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2})/g) ?? []
+  return uniq([...(one ? [one] : []), ...many, ...fromRecursive, ...fromSerialized])
 }
 
 export function getSubnetAssociations(resource: AzureResource): { nsgId?: string; routeTableId?: string } {

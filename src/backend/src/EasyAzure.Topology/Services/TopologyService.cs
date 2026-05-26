@@ -305,7 +305,6 @@ public class TopologyService : ITopologyService
                 .Where(id => !string.IsNullOrWhiteSpace(id))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            if (attachedSubnetIds.Count == 0) continue;
 
             foreach (var route in routes.OfType<JObject>())
             {
@@ -313,8 +312,9 @@ public class TopologyService : ITopologyService
                 var prefix = routeProps?["addressPrefix"]?.ToString();
                 if (!string.Equals(prefix, "0.0.0.0/0", StringComparison.Ordinal)) continue;
 
-                var nextHopType = routeProps?["nextHopType"]?.ToString() ?? "Unknown";
+                var rawNextHopType = routeProps?["nextHopType"]?.ToString() ?? string.Empty;
                 var nextHopIp = routeProps?["nextHopIpAddress"]?.ToString() ?? string.Empty;
+                var nextHopType = NormalizeDefaultRouteNextHopType(rawNextHopType, nextHopIp);
                 var routeName = route["name"]?.ToString() ?? "default";
                 hasDefaultRoute = true;
 
@@ -522,6 +522,20 @@ public class TopologyService : ITopologyService
         }
 
         return index;
+    }
+
+    private static string NormalizeDefaultRouteNextHopType(string nextHopType, string nextHopIp)
+    {
+        if (!string.IsNullOrWhiteSpace(nextHopIp)) return string.IsNullOrWhiteSpace(nextHopType) ? "VirtualAppliance" : nextHopType;
+
+        if (string.IsNullOrWhiteSpace(nextHopType)) return "Internet";
+
+        return nextHopType.Trim().ToLowerInvariant() switch
+        {
+            "nsg" => "Internet",
+            "none" => "Internet",
+            _ => nextHopType,
+        };
     }
 
     private static Dictionary<string, HashSet<string>> BuildRouteTableSubnetIndex(List<AzureResource> resources)
