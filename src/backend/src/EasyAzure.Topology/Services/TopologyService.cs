@@ -169,32 +169,32 @@ public class TopologyService : ITopologyService
 
     private static bool HasCidr(IDictionary<string, object> properties)
     {
-        if (TryGetValueCaseInsensitive(properties, "addressPrefix", out var ap) &&
-            ap is JValue { Type: JTokenType.String } apJv &&
-            !string.IsNullOrWhiteSpace(apJv.Value<string>()))
+        // Treat the subnet as having a real CIDR only when addressPrefix or
+        // addressPrefixes actually contains a usable string. We previously had a
+        // permissive regex-on-serialized-properties fallback here, but that
+        // matched stray CIDR-shaped strings in service endpoints / NSG rules and
+        // suppressed the ARM REST enrichment for subnets that really did need it.
+        if (TryGetValueCaseInsensitive(properties, "addressPrefix", out var ap))
         {
-            return true;
-        }
-        if (TryGetValueCaseInsensitive(properties, "addressPrefix", out var apStr) &&
-            apStr is string apS && !string.IsNullOrWhiteSpace(apS))
-        {
-            return true;
-        }
-        if (TryGetValueCaseInsensitive(properties, "addressPrefixes", out var apx) &&
-            apx is JArray apxArr && apxArr.OfType<JValue>().Any(v => v.Type == JTokenType.String && !string.IsNullOrWhiteSpace(v.Value<string>())))
-        {
-            return true;
+            if (ap is string apStr && !string.IsNullOrWhiteSpace(apStr)) return true;
+            if (ap is JValue { Type: JTokenType.String } apJv &&
+                !string.IsNullOrWhiteSpace(apJv.Value<string>())) return true;
         }
 
-        try
+        if (TryGetValueCaseInsensitive(properties, "addressPrefixes", out var apx) &&
+            apx is JArray apxArr)
         {
-            var serialized = Newtonsoft.Json.JsonConvert.SerializeObject(properties);
-            return System.Text.RegularExpressions.Regex.IsMatch(serialized, @"\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}");
+            foreach (var item in apxArr)
+            {
+                if (item is JValue { Type: JTokenType.String } jv &&
+                    !string.IsNullOrWhiteSpace(jv.Value<string>()))
+                {
+                    return true;
+                }
+            }
         }
-        catch
-        {
-            return false;
-        }
+
+        return false;
     }
 
     private static List<AzureResource> PromoteSubnets(List<AzureResource> resources)

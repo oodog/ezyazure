@@ -19,6 +19,8 @@ import ReplicateDialog from './ReplicateDialog'
 import DiscoveryResourceNode from './DiscoveryResourceNode'
 import { useManualSubscriptions, isValidSubscriptionId } from '@/hooks/useManualSubscriptions'
 import type { AzureResource, FlowEdge as ApiFlowEdge, FlowNode as ApiFlowNode } from '@/types/azure'
+import { applyDagreLayout } from '@/utils/dagreLayout'
+import { loadDiscoveryCache, saveDiscoveryCache } from '@/utils/discoveryCache'
 
 const nodeTypes = { azureResource: DiscoveryResourceNode }
 const INTERNET_NODE_ID = 'easyazure://internet'
@@ -43,7 +45,7 @@ function edgeStyleFor(category: string | undefined) {
     case 'route':
       return { stroke: '#f59e0b', strokeWidth: 2, animated: false, dash: undefined }
     case 'associatedWith':
-      return { stroke: '#94a3b8', strokeWidth: 1.5, animated: false, dash: '4 4' }
+      return { stroke: '#475569', strokeWidth: 2, animated: false, dash: '6 3' }
     case 'contains':
     default:
       return { stroke: '#cbd5e1', strokeWidth: 1.5, animated: false, dash: undefined }
@@ -106,6 +108,20 @@ export default function DiscoveryView() {
     })
   }, [])
 
+  // Rehydrate the previous discovery result so navigating away from this view
+  // and coming back doesn't force a re-discovery. The cache is per-session.
+  useEffect(() => {
+    const cached = loadDiscoveryCache()
+    if (!cached) return
+    if (cached.nodes.length === 0) return
+    setNodes(cached.nodes)
+    setEdges(cached.edges)
+    if (cached.subscriptionIds.length > 0) {
+      setSelectedSubs(new Set(cached.subscriptionIds))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Merge API-visible + manually-added subscriptions, de-duplicated by id.
   // Manual entries override API entries so users can label them however they want.
   const subscriptions = useMemo(() => {
@@ -124,6 +140,8 @@ export default function DiscoveryView() {
       else next.add(id)
       return next
     })
+    // Auto-close the picker shortly after a selection so it doesn't stay open.
+    window.setTimeout(() => setPickerOpen(false), 150)
   }
 
   const selectAllSubs = () => setSelectedSubs(new Set(subscriptions.map((s) => s.id)))
@@ -155,8 +173,17 @@ export default function DiscoveryView() {
         selectedSubIds.length === 1
           ? await discoveryService.getTopology(selectedSubIds[0])
           : await discoveryService.getTopologyMulti(selectedSubIds)
-      setNodes(topology.nodes.map(toReactFlowNode))
-      setEdges(topology.edges.map(toReactFlowEdge))
+      const rfNodes = topology.nodes.map(toReactFlowNode)
+      const rfEdges = topology.edges.map(toReactFlowEdge)
+      const laidOut = applyDagreLayout(rfNodes, rfEdges)
+      setNodes(laidOut)
+      setEdges(rfEdges)
+      saveDiscoveryCache({
+        subscriptionIds: selectedSubIds,
+        nodes: laidOut,
+        edges: rfEdges,
+        capturedAt: Date.now(),
+      })
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Discovery failed.')
     } finally {
