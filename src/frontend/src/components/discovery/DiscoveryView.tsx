@@ -54,7 +54,7 @@ function edgeStyleFor(category: string | undefined) {
 
 function toReactFlowNode(n: ApiFlowNode): Node<AzureResource> {
   return {
-    id: n.id,
+    id: n.id.toLowerCase(),
     type: 'azureResource',
     position: n.position,
     data: n.data,
@@ -64,9 +64,9 @@ function toReactFlowNode(n: ApiFlowNode): Node<AzureResource> {
 function toReactFlowEdge(e: ApiFlowEdge): Edge {
   const s = edgeStyleFor(e.category)
   return {
-    id: e.id,
-    source: e.source,
-    target: e.target,
+    id: e.id.toLowerCase(),
+    source: e.source.toLowerCase(),
+    target: e.target.toLowerCase(),
     label: e.label,
     animated: s.animated,
     style: {
