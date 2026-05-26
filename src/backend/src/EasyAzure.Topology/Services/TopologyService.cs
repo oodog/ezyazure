@@ -766,24 +766,63 @@ public class TopologyService : ITopologyService
                 }
 
                 // Show the egress destination as a first-class node so users can
-                // visually follow VM -> subnet -> route table -> (firewall) -> Internet.
+                // visually follow the full data path including VNet peering hops.
                 // When nextHopType is VirtualAppliance and the IP matches a discovered
-                // firewall, route the edge through the firewall node.
-                if (!string.IsNullOrWhiteSpace(nextHopIp) && firewallIpIndex.TryGetValue(nextHopIp, out var fwId))
+                // firewall, route the edge through the firewall's subnet → firewall.
+                if (!string.IsNullOrWhiteSpace(nextHopIp) && firewallIpIndex.TryGetValue(nextHopIp, out var fwInfo))
                 {
-                    Emit(new FlowEdge(
-                        Id: $"defaultroute|{rt.Id}|{fwId}|{routeName}",
-                        Source: rt.Id,
-                        Target: fwId,
-                        Label: $"0.0.0.0/0 → {nextHopIp}",
-                        Category: FlowEdgeCategory.DefaultRoute,
-                        Metadata: new Dictionary<string, string>
-                        {
-                            ["addressPrefix"] = "0.0.0.0/0",
-                            ["nextHopType"] = nextHopType,
-                            ["nextHopIpAddress"] = nextHopIp,
-                            ["routeName"] = routeName,
-                        }));
+                    var fwId = fwInfo.FirewallId;
+                    var fwSubnetId = fwInfo.SubnetId;
+
+                    // RT → Firewall Subnet (shows traffic crosses via peering into the FW subnet)
+                    if (!string.IsNullOrWhiteSpace(fwSubnetId))
+                    {
+                        Emit(new FlowEdge(
+                            Id: $"defaultroute|{rt.Id}|{fwSubnetId}|{routeName}",
+                            Source: rt.Id,
+                            Target: fwSubnetId,
+                            Label: $"0.0.0.0/0 → {nextHopIp} (via peering)",
+                            Category: FlowEdgeCategory.DefaultRoute,
+                            Metadata: new Dictionary<string, string>
+                            {
+                                ["addressPrefix"] = "0.0.0.0/0",
+                                ["nextHopType"] = nextHopType,
+                                ["nextHopIpAddress"] = nextHopIp,
+                                ["routeName"] = routeName,
+                            }));
+                        // Firewall Subnet → Firewall
+                        Emit(new FlowEdge(
+                            Id: $"defaultroute|{fwSubnetId}|{fwId}|{routeName}",
+                            Source: fwSubnetId,
+                            Target: fwId,
+                            Label: "next hop",
+                            Category: FlowEdgeCategory.DefaultRoute,
+                            Metadata: new Dictionary<string, string>
+                            {
+                                ["addressPrefix"] = "0.0.0.0/0",
+                                ["nextHopType"] = nextHopType,
+                                ["nextHopIpAddress"] = nextHopIp,
+                            }));
+                    }
+                    else
+                    {
+                        // No subnet info — fall back to direct RT → FW edge
+                        Emit(new FlowEdge(
+                            Id: $"defaultroute|{rt.Id}|{fwId}|{routeName}",
+                            Source: rt.Id,
+                            Target: fwId,
+                            Label: $"0.0.0.0/0 → {nextHopIp}",
+                            Category: FlowEdgeCategory.DefaultRoute,
+                            Metadata: new Dictionary<string, string>
+                            {
+                                ["addressPrefix"] = "0.0.0.0/0",
+                                ["nextHopType"] = nextHopType,
+                                ["nextHopIpAddress"] = nextHopIp,
+                                ["routeName"] = routeName,
+                            }));
+                    }
+
+                    // Firewall → Internet
                     Emit(new FlowEdge(
                         Id: $"defaultroute|{fwId}|{InternetNodeId}|{routeName}",
                         Source: fwId,
@@ -1078,12 +1117,13 @@ public class TopologyService : ITopologyService
     }
 
     /// <summary>
-    /// Builds a mapping from firewall private IP address → firewall resource ID.
-    /// Azure Firewall exposes its private IP in properties.ipConfigurations[].properties.privateIPAddress.
+    /// Builds a mapping from firewall private IP address → (firewall resource ID, firewall subnet ID).
+    /// Azure Firewall exposes its private IP in properties.ipConfigurations[].properties.privateIPAddress
+    /// and its subnet in properties.ipConfigurations[].properties.subnet.id.
     /// </summary>
-    private static Dictionary<string, string> BuildFirewallPrivateIpIndex(List<AzureResource> resources)
+    private static Dictionary<string, (string FirewallId, string? SubnetId)> BuildFirewallPrivateIpIndex(List<AzureResource> resources)
     {
-        var index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var index = new Dictionary<string, (string FirewallId, string? SubnetId)>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var fw in resources.Where(r =>
                      string.Equals(r.Type, "Microsoft.Network/azureFirewalls", StringComparison.OrdinalIgnoreCase)))
@@ -1099,20 +1139,27 @@ public class TopologyService : ITopologyService
             foreach (var item in items)
             {
                 string? ip = null;
+                string? subnetId = null;
                 if (item is JObject jo)
                 {
-                    ip = (jo["properties"] as JObject)?["privateIPAddress"]?.ToString();
+                    var props = jo["properties"] as JObject;
+                    ip = props?["privateIPAddress"]?.ToString();
+                    subnetId = (props?["subnet"] as JObject)?["id"]?.ToString();
                 }
                 else if (item is IDictionary<string, object> d &&
                          TryGetValueCaseInsensitive(d, "properties", out var pVal) &&
-                         pVal is IDictionary<string, object> pDict &&
-                         TryGetValueCaseInsensitive(pDict, "privateIPAddress", out var ipVal))
+                         pVal is IDictionary<string, object> pDict)
                 {
-                    ip = ipVal as string;
+                    if (TryGetValueCaseInsensitive(pDict, "privateIPAddress", out var ipVal))
+                        ip = ipVal as string;
+                    if (TryGetValueCaseInsensitive(pDict, "subnet", out var subObj) &&
+                        subObj is IDictionary<string, object> subDict &&
+                        TryGetValueCaseInsensitive(subDict, "id", out var subIdVal))
+                        subnetId = subIdVal as string;
                 }
 
                 if (!string.IsNullOrWhiteSpace(ip))
-                    index[ip!] = fw.Id;
+                    index[ip!] = (fw.Id, subnetId);
             }
         }
 
