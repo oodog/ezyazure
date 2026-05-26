@@ -68,13 +68,13 @@ public class ResourceGraphService
     public Task<IReadOnlyList<AzureResource>> GetVNetsAsync(
         string subscriptionId, CancellationToken ct = default) =>
         QueryAsync(
-            "Resources | where type =~ 'Microsoft.Network/virtualNetworks' | project id, name, type, location, resourceGroup, subscriptionId, properties, tags, addressPrefixes = properties.addressSpace.addressPrefixes, dnsServers = properties.dhcpOptions.dnsServers",
+            "Resources | where type =~ 'Microsoft.Network/virtualNetworks' | project id, name, type, location, resourceGroup, subscriptionId, properties, tags",
             [subscriptionId], ct);
 
     public Task<IReadOnlyList<AzureResource>> GetSubnetsAsync(
         string subscriptionId, CancellationToken ct = default) =>
         QueryAsync(
-            "Resources | where type =~ 'Microsoft.Network/virtualNetworks' | mv-expand subnet = properties.subnets | project id = subnet.id, name = subnet.name, type = 'Microsoft.Network/virtualNetworks/subnets', location, resourceGroup, subscriptionId, properties = subnet.properties, tags, addressPrefix = subnet.properties.addressPrefix, addressPrefixes = subnet.properties.addressPrefixes, networkSecurityGroupId = tostring(subnet.properties.networkSecurityGroup.id), routeTableId = tostring(subnet.properties.routeTable.id), privateLinkServiceNetworkPolicies = subnet.properties.privateLinkServiceNetworkPolicies, privateEndpointNetworkPolicies = subnet.properties.privateEndpointNetworkPolicies, defaultOutboundAccess = subnet.properties.defaultOutboundAccess",
+            "Resources | where type =~ 'Microsoft.Network/virtualNetworks' | mv-expand subnet = properties.subnets | project id = tostring(subnet.id), name = tostring(subnet.name), type = 'Microsoft.Network/virtualNetworks/subnets', location, resourceGroup, subscriptionId, properties = subnet.properties, tags",
             [subscriptionId], ct);
 
     public Task<IReadOnlyList<AzureResource>> GetNSGsAsync(
@@ -117,27 +117,6 @@ public class ResourceGraphService
         {
             if (row is not Newtonsoft.Json.Linq.JObject obj) continue;
 
-            var properties = obj["properties"]?.ToObject<Dictionary<string, object>>() ?? [];
-            foreach (var prop in obj.Properties())
-            {
-                var name = prop.Name;
-                if (name.Equals("id", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals("name", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals("type", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals("location", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals("resourceGroup", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals("subscriptionId", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals("properties", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals("tags", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                properties[name] = prop.Value.Type == Newtonsoft.Json.Linq.JTokenType.Null
-                    ? string.Empty
-                    : prop.Value;
-            }
-
             result.Add(new AzureResource
             {
                 Id = obj["id"]?.ToString() ?? string.Empty,
@@ -146,7 +125,7 @@ public class ResourceGraphService
                 Location = obj["location"]?.ToString() ?? string.Empty,
                 ResourceGroup = obj["resourceGroup"]?.ToString() ?? string.Empty,
                 SubscriptionId = obj["subscriptionId"]?.ToString() ?? string.Empty,
-                Properties = properties,
+                Properties = obj["properties"]?.ToObject<Dictionary<string, object>>() ?? [],
                 Tags = obj["tags"]?.ToObject<Dictionary<string, string>>() ?? [],
             });
         }

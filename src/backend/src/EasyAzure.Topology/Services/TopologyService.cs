@@ -44,7 +44,6 @@ public class TopologyService : ITopologyService
             // Each collector is wrapped so missing RBAC on a single resource type
             // never blocks the whole topology. Errors are logged + skipped.
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetVNetsAsync(subscriptionId, ct), "VNets", subscriptionId));
-            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetSubnetsAsync(subscriptionId, ct), "Subnets", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetNSGsAsync(subscriptionId, ct), "NSGs", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetRouteTablesAsync(subscriptionId, ct), "RouteTables", subscriptionId));
             allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetVMsAsync(subscriptionId, ct), "VMs", subscriptionId));
@@ -250,6 +249,7 @@ public class TopologyService : ITopologyService
         var byId = resources.ToDictionary(r => r.Id, StringComparer.OrdinalIgnoreCase);
         var nicToSubnetIds = BuildNicSubnetIndex(networkInterfaces);
         var hasDefaultRoute = false;
+        var subnetsWithExplicitDefault = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var routeTableToSubnetIds = BuildRouteTableSubnetIndex(resources);
         var routeTables = resources
             .Where(r => r.Type.Equals("Microsoft.Network/routeTables", StringComparison.OrdinalIgnoreCase))
@@ -321,6 +321,7 @@ public class TopologyService : ITopologyService
                 foreach (var subnetId in attachedSubnetIds)
                 {
                     if (string.IsNullOrEmpty(subnetId)) continue;
+                    subnetsWithExplicitDefault.Add(subnetId);
                     Emit(new FlowEdge(
                         Id: $"defaultroute|{subnetId}|{rt.Id}|{routeName}",
                         Source: subnetId,
@@ -357,6 +358,42 @@ public class TopologyService : ITopologyService
         if (hasDefaultRoute)
         {
             EnsureInternetNode(resources);
+        }
+
+        // Synthesise Azure system default route (0.0.0.0/0 → Internet) for any
+        // subnet that has NO explicit UDR overriding the default. Azure's implicit
+        // system routes send all unmatched traffic to the Internet next hop,
+        // optionally filtered by an NSG. This makes egress visible on every subnet.
+        var subnetsForSystemDefault = resources
+            .Where(r => r.Type.Equals("Microsoft.Network/virtualNetworks/subnets", StringComparison.OrdinalIgnoreCase))
+            .Where(s => !subnetsWithExplicitDefault.Contains(s.Id))
+            .ToList();
+
+        if (subnetsForSystemDefault.Count > 0)
+        {
+            EnsureInternetNode(resources);
+            foreach (var subnet in subnetsForSystemDefault)
+            {
+                // If the subnet has an NSG, label that the egress passes through it.
+                var nsgId = TryGetReferenceId(subnet.Properties, "networkSecurityGroup");
+                var label = string.IsNullOrEmpty(nsgId)
+                    ? "0.0.0.0/0 → Internet (system default)"
+                    : "0.0.0.0/0 → Internet (via NSG, system default)";
+
+                Emit(new FlowEdge(
+                    Id: $"systemdefault|{subnet.Id}|{InternetNodeId}",
+                    Source: subnet.Id,
+                    Target: InternetNodeId,
+                    Label: label,
+                    Category: FlowEdgeCategory.DefaultRoute,
+                    Metadata: new Dictionary<string, string>
+                    {
+                        ["addressPrefix"] = "0.0.0.0/0",
+                        ["nextHopType"] = "Internet",
+                        ["routeName"] = "system-default",
+                        ["source"] = "system",
+                    }));
+            }
         }
 
         return edges;
