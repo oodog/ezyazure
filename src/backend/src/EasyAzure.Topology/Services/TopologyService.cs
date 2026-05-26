@@ -206,15 +206,27 @@ public class TopologyService : ITopologyService
                 continue;
 
             var nicIds = new List<string>();
-            if (TryGetValueCaseInsensitive(vm.Properties, "networkProfile", out var npObj) && npObj is JObject np &&
-                np["networkInterfaces"] is JArray nicArr)
+
+            // Handle both JObject (pre-normalization) and native dict (post-normalization)
+            if (TryGetValueCaseInsensitive(vm.Properties, "networkProfile", out var npObj))
             {
-                foreach (var item in nicArr.OfType<JObject>())
+                IEnumerable<object>? nicList = null;
+                if (npObj is JObject np && np["networkInterfaces"] is JArray nicArr)
+                    nicList = nicArr;
+                else if (npObj is IDictionary<string, object> npDict &&
+                         TryGetValueCaseInsensitive(npDict, "networkInterfaces", out var niVal) && niVal is IList<object> niList)
+                    nicList = niList;
+
+                if (nicList is not null)
                 {
-                    if (item["id"] is JValue { Type: JTokenType.String } idJv)
+                    foreach (var item in nicList)
                     {
-                        var nicId = idJv.Value<string>();
-                        if (!string.IsNullOrWhiteSpace(nicId)) nicIds.Add(nicId);
+                        string? nicId = null;
+                        if (item is JObject jo && jo["id"] is JValue { Type: JTokenType.String } idJv)
+                            nicId = idJv.ToObject<string>();
+                        else if (item is IDictionary<string, object> d && TryGetValueCaseInsensitive(d, "id", out var idVal) && idVal is string idStr)
+                            nicId = idStr;
+                        if (!string.IsNullOrWhiteSpace(nicId)) nicIds.Add(nicId!);
                     }
                 }
             }
@@ -225,16 +237,28 @@ public class TopologyService : ITopologyService
             foreach (var nicId in nicIds)
             {
                 if (!nicById.TryGetValue(nicId, out var nic)) continue;
-                if (!TryGetValueCaseInsensitive(nic.Properties, "ipConfigurations", out var cfgObj) ||
-                    cfgObj is not JArray cfgArr) continue;
-                foreach (var cfg in cfgArr.OfType<JObject>())
+                if (!TryGetValueCaseInsensitive(nic.Properties, "ipConfigurations", out var cfgObj)) continue;
+
+                IEnumerable<object>? cfgList = null;
+                if (cfgObj is JArray cfgArr) cfgList = cfgArr;
+                else if (cfgObj is IList<object> nativeCfgList) cfgList = nativeCfgList;
+                if (cfgList is null) continue;
+
+                foreach (var cfg in cfgList)
                 {
-                    var ipProps = cfg["properties"] as JObject;
-                    if (ipProps?["privateIPAddress"] is JValue { Type: JTokenType.String } ipJv)
+                    string? ip = null;
+                    if (cfg is JObject cfgJo)
                     {
-                        var ip = ipJv.Value<string>();
-                        if (!string.IsNullOrWhiteSpace(ip)) ips.Add(ip);
+                        ip = (cfgJo["properties"] as JObject)?["privateIPAddress"]?.ToObject<string>();
                     }
+                    else if (cfg is IDictionary<string, object> cfgDict &&
+                             TryGetValueCaseInsensitive(cfgDict, "properties", out var propsVal) &&
+                             propsVal is IDictionary<string, object> propsDict &&
+                             TryGetValueCaseInsensitive(propsDict, "privateIPAddress", out var ipVal))
+                    {
+                        ip = ipVal as string;
+                    }
+                    if (!string.IsNullOrWhiteSpace(ip)) ips.Add(ip!);
                 }
             }
 
@@ -254,6 +278,80 @@ public class TopologyService : ITopologyService
                 SubscriptionId = vm.SubscriptionId,
                 Properties = dict,
                 Tags = vm.Tags,
+            };
+        }
+
+        // Private Endpoints have networkInterfaces[].id directly in their properties
+        for (var i = 0; i < resources.Count; i++)
+        {
+            var pe = resources[i];
+            if (!string.Equals(pe.Type, "Microsoft.Network/privateEndpoints", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var peNicIds = new List<string>();
+            if (TryGetValueCaseInsensitive(pe.Properties, "networkInterfaces", out var peNiVal))
+            {
+                IEnumerable<object>? peNiList = null;
+                if (peNiVal is JArray peNiArr) peNiList = peNiArr;
+                else if (peNiVal is IList<object> peNiNative) peNiList = peNiNative;
+
+                if (peNiList is not null)
+                {
+                    foreach (var item in peNiList)
+                    {
+                        string? nicId = null;
+                        if (item is JObject jo && jo["id"] is JValue { Type: JTokenType.String } idJv)
+                            nicId = idJv.ToObject<string>();
+                        else if (item is IDictionary<string, object> d && TryGetValueCaseInsensitive(d, "id", out var idVal) && idVal is string idStr)
+                            nicId = idStr;
+                        if (!string.IsNullOrWhiteSpace(nicId)) peNicIds.Add(nicId!);
+                    }
+                }
+            }
+
+            if (peNicIds.Count == 0) continue;
+
+            var peIps = new List<string>();
+            foreach (var nicId in peNicIds)
+            {
+                if (!nicById.TryGetValue(nicId, out var nic)) continue;
+                if (!TryGetValueCaseInsensitive(nic.Properties, "ipConfigurations", out var cfgObj2)) continue;
+
+                IEnumerable<object>? cfgList2 = null;
+                if (cfgObj2 is JArray cfgArr2) cfgList2 = cfgArr2;
+                else if (cfgObj2 is IList<object> nCfg2) cfgList2 = nCfg2;
+                if (cfgList2 is null) continue;
+
+                foreach (var cfg in cfgList2)
+                {
+                    string? ip = null;
+                    if (cfg is JObject cfgJo)
+                        ip = (cfgJo["properties"] as JObject)?["privateIPAddress"]?.ToObject<string>();
+                    else if (cfg is IDictionary<string, object> cfgDict &&
+                             TryGetValueCaseInsensitive(cfgDict, "properties", out var pVal) &&
+                             pVal is IDictionary<string, object> pDict &&
+                             TryGetValueCaseInsensitive(pDict, "privateIPAddress", out var ipVal))
+                        ip = ipVal as string;
+                    if (!string.IsNullOrWhiteSpace(ip)) peIps.Add(ip!);
+                }
+            }
+
+            if (peIps.Count == 0) continue;
+
+            var peDict = new Dictionary<string, object>(pe.Properties, StringComparer.OrdinalIgnoreCase)
+            {
+                ["privateIPAddresses"] = peIps.Distinct(StringComparer.OrdinalIgnoreCase).ToList<object>(),
+            };
+            resources[i] = new AzureResource
+            {
+                Id = pe.Id,
+                Name = pe.Name,
+                Type = pe.Type,
+                Location = pe.Location,
+                ResourceGroup = pe.ResourceGroup,
+                SubscriptionId = pe.SubscriptionId,
+                Properties = peDict,
+                Tags = pe.Tags,
             };
         }
     }

@@ -45,7 +45,7 @@ function edgeStyleFor(category: string | undefined) {
     case 'route':
       return { stroke: '#f59e0b', strokeWidth: 2, animated: false, dash: undefined }
     case 'associatedWith':
-      return { stroke: '#475569', strokeWidth: 2, animated: false, dash: '6 3' }
+      return { stroke: '#be185d', strokeWidth: 2.5, animated: false, dash: undefined }
     case 'contains':
     default:
       return { stroke: '#cbd5e1', strokeWidth: 1.5, animated: false, dash: undefined }

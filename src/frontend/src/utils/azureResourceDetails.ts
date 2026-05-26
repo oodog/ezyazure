@@ -108,16 +108,22 @@ export function getSubnetPrefixes(resource: AzureResource): string[] {
 }
 
 export function getVmPrivateIps(resource: AzureResource): string[] {
-  if (resource.type.toLowerCase() !== 'microsoft.compute/virtualmachines') return []
+  const allowedTypes = [
+    'microsoft.compute/virtualmachines',
+    'microsoft.network/privateendpoints',
+  ]
+  if (!allowedTypes.includes(resource.type.toLowerCase())) return []
   const props = resource.properties ?? {}
   const p = props as Obj
-  // Backend enrichment flattens NIC IPs to properties.privateIPAddresses;
-  // also accept Azure's nested networkProfile shape as a fallback.
+  // Backend enrichment flattens NIC IPs to properties.privateIPAddresses
   const flat = asStrList(getCI(p, 'privateIPAddresses'))
   if (flat.length > 0) return uniq(flat)
 
+  // Fallback: parse nested networkProfile (VMs) or networkInterfaces (PEs)
   const np = asObj(getCI(p, 'networkProfile'))
-  const nics = Array.isArray(getCI(np, 'networkInterfaces')) ? (getCI(np, 'networkInterfaces') as unknown[]) : []
+  const nicsFromProfile = Array.isArray(getCI(np, 'networkInterfaces')) ? (getCI(np, 'networkInterfaces') as unknown[]) : []
+  const nicsFromPE = Array.isArray(getCI(p, 'networkInterfaces')) ? (getCI(p, 'networkInterfaces') as unknown[]) : []
+  const nics = [...nicsFromProfile, ...nicsFromPE]
   const found: string[] = []
   for (const nic of nics) {
     const nicProps = asObj((nic as Obj)?.properties)
