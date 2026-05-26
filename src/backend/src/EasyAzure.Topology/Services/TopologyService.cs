@@ -61,7 +61,8 @@ public class TopologyService : ITopologyService
         // with different property depths. Merge them by ID so edges and details use
         // the richest available shape.
         allResources = ConsolidateResources(allResources);
-        await EnrichMissingSubnetPrefixesAsync(allResources, ct);
+        await EnrichSubnetsFromArmAsync(allResources, ct);
+        EnrichVmPrivateIps(allResources, networkInterfaces);
         EnsureInternetNode(allResources);
 
         var nodes = BuildNodes(allResources);
@@ -92,6 +93,164 @@ public class TopologyService : ITopologyService
                 "Topology: collecting {Kind} for subscription {Sub} failed; continuing without them.",
                 kind, subscriptionId);
             return [];
+        }
+    }
+
+    private async Task EnrichSubnetsFromArmAsync(List<AzureResource> resources, CancellationToken ct)
+    {
+        // Azure Resource Graph routinely returns subnet shapes with broken nested
+        // references — e.g. `networkSecurityGroup: { id: [] }` and
+        // `addressPrefixes: [ [] ]`. Filtering on those locally is unreliable, so we
+        // unconditionally re-hydrate every subnet from ARM REST (which is the
+        // authoritative source for subnet shape). This is bounded by the actual
+        // subnet count, which is small for typical subscriptions.
+        var subnets = resources
+            .Where(r => string.Equals(r.Type, "Microsoft.Network/virtualNetworks/subnets", StringComparison.OrdinalIgnoreCase))
+            .Where(r => !string.IsNullOrWhiteSpace(r.Id) && r.Id.StartsWith("/", StringComparison.Ordinal))
+            .ToList();
+
+        if (subnets.Count == 0) return;
+
+        _logger.LogInformation("Enriching {Count} subnet(s) from ARM REST", subnets.Count);
+
+        var byId = resources.ToDictionary(r => r.Id, StringComparer.OrdinalIgnoreCase);
+
+        var fetches = subnets.Select(async s =>
+        {
+            var arm = await _resourceGraph.GetArmResourceAsync(s.Id, "2024-05-01", ct);
+            if (arm is null) return;
+            var armProps = arm["properties"] as JObject;
+            if (armProps is null) return;
+
+            if (!byId.TryGetValue(s.Id, out var current)) return;
+
+            var dict = new Dictionary<string, object>(current.Properties, StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in armProps.Properties())
+            {
+                if (prop.Value is null || prop.Value.Type == JTokenType.Null) continue;
+                // ARM is authoritative for subnet shape — overwrite even when the
+                // existing key has a value, because that value may be the broken
+                // ARG shape (e.g. id: []).
+                dict[prop.Name] = prop.Value;
+            }
+
+            // Flatten high-value fields so edge builders that look for flat ID
+            // strings can find them without re-parsing nested JObjects.
+            if (armProps["addressPrefix"] is JValue { Type: JTokenType.String } apJv)
+            {
+                var ap = apJv.Value<string>();
+                if (!string.IsNullOrWhiteSpace(ap)) dict["addressPrefix"] = ap;
+            }
+            if (armProps["addressPrefixes"] is JArray apArr && apArr.Count > 0)
+            {
+                dict["addressPrefixes"] = apArr;
+            }
+            if ((armProps["networkSecurityGroup"] as JObject)?["id"] is JValue { Type: JTokenType.String } nsgJv)
+            {
+                var nsgId = nsgJv.Value<string>();
+                if (!string.IsNullOrWhiteSpace(nsgId) && nsgId.StartsWith("/", StringComparison.Ordinal))
+                    dict["networkSecurityGroupId"] = nsgId;
+            }
+            if ((armProps["routeTable"] as JObject)?["id"] is JValue { Type: JTokenType.String } rtJv)
+            {
+                var rtId = rtJv.Value<string>();
+                if (!string.IsNullOrWhiteSpace(rtId) && rtId.StartsWith("/", StringComparison.Ordinal))
+                    dict["routeTableId"] = rtId;
+            }
+
+            byId[s.Id] = new AzureResource
+            {
+                Id = current.Id,
+                Name = current.Name,
+                Type = current.Type,
+                Location = current.Location,
+                ResourceGroup = current.ResourceGroup,
+                SubscriptionId = current.SubscriptionId,
+                Properties = dict,
+                Tags = current.Tags,
+            };
+        }).ToArray();
+
+        await Task.WhenAll(fetches);
+
+        for (var i = 0; i < resources.Count; i++)
+        {
+            if (byId.TryGetValue(resources[i].Id, out var updated))
+            {
+                resources[i] = updated;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Walks every VM's <c>properties.networkProfile.networkInterfaces[].id</c>,
+    /// looks up the corresponding NIC from <paramref name="networkInterfaces"/>,
+    /// and copies the primary private IP address(es) onto the VM's
+    /// <c>properties.privateIPAddresses</c>. This lets the discovery node + side
+    /// panel show the VM's IP without an extra ARM call per VM.
+    /// </summary>
+    private static void EnrichVmPrivateIps(List<AzureResource> resources, List<AzureResource> networkInterfaces)
+    {
+        if (networkInterfaces.Count == 0) return;
+
+        var nicById = networkInterfaces.ToDictionary(n => n.Id, StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 0; i < resources.Count; i++)
+        {
+            var vm = resources[i];
+            if (!string.Equals(vm.Type, "Microsoft.Compute/virtualMachines", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var nicIds = new List<string>();
+            if (TryGetValueCaseInsensitive(vm.Properties, "networkProfile", out var npObj) && npObj is JObject np &&
+                np["networkInterfaces"] is JArray nicArr)
+            {
+                foreach (var item in nicArr.OfType<JObject>())
+                {
+                    if (item["id"] is JValue { Type: JTokenType.String } idJv)
+                    {
+                        var nicId = idJv.Value<string>();
+                        if (!string.IsNullOrWhiteSpace(nicId)) nicIds.Add(nicId);
+                    }
+                }
+            }
+
+            if (nicIds.Count == 0) continue;
+
+            var ips = new List<string>();
+            foreach (var nicId in nicIds)
+            {
+                if (!nicById.TryGetValue(nicId, out var nic)) continue;
+                if (!TryGetValueCaseInsensitive(nic.Properties, "ipConfigurations", out var cfgObj) ||
+                    cfgObj is not JArray cfgArr) continue;
+                foreach (var cfg in cfgArr.OfType<JObject>())
+                {
+                    var ipProps = cfg["properties"] as JObject;
+                    if (ipProps?["privateIPAddress"] is JValue { Type: JTokenType.String } ipJv)
+                    {
+                        var ip = ipJv.Value<string>();
+                        if (!string.IsNullOrWhiteSpace(ip)) ips.Add(ip);
+                    }
+                }
+            }
+
+            if (ips.Count == 0) continue;
+
+            var dict = new Dictionary<string, object>(vm.Properties, StringComparer.OrdinalIgnoreCase)
+            {
+                ["privateIPAddresses"] = new JArray(ips.Distinct(StringComparer.OrdinalIgnoreCase)),
+            };
+            resources[i] = new AzureResource
+            {
+                Id = vm.Id,
+                Name = vm.Name,
+                Type = vm.Type,
+                Location = vm.Location,
+                ResourceGroup = vm.ResourceGroup,
+                SubscriptionId = vm.SubscriptionId,
+                Properties = dict,
+                Tags = vm.Tags,
+            };
         }
     }
 

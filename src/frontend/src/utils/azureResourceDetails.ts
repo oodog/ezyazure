@@ -107,6 +107,32 @@ export function getSubnetPrefixes(resource: AzureResource): string[] {
   return uniq([...(one ? [one] : []), ...many, ...fromRecursive, ...fromSerialized])
 }
 
+export function getVmPrivateIps(resource: AzureResource): string[] {
+  if (resource.type.toLowerCase() !== 'microsoft.compute/virtualmachines') return []
+  const props = resource.properties ?? {}
+  const p = props as Obj
+  // Backend enrichment flattens NIC IPs to properties.privateIPAddresses;
+  // also accept Azure's nested networkProfile shape as a fallback.
+  const flat = asStrList(getCI(p, 'privateIPAddresses'))
+  if (flat.length > 0) return uniq(flat)
+
+  const np = asObj(getCI(p, 'networkProfile'))
+  const nics = Array.isArray(getCI(np, 'networkInterfaces')) ? (getCI(np, 'networkInterfaces') as unknown[]) : []
+  const found: string[] = []
+  for (const nic of nics) {
+    const nicProps = asObj((nic as Obj)?.properties)
+    const cfgs = Array.isArray(getCI(nicProps, 'ipConfigurations'))
+      ? (getCI(nicProps, 'ipConfigurations') as unknown[])
+      : []
+    for (const cfg of cfgs) {
+      const cfgProps = asObj((cfg as Obj)?.properties)
+      const ip = asStr(getCI(cfgProps, 'privateIPAddress'))
+      if (ip) found.push(ip)
+    }
+  }
+  return uniq(found)
+}
+
 export function getSubnetAssociations(resource: AzureResource): { nsgId?: string; routeTableId?: string } {
   if (resource.type.toLowerCase() !== 'microsoft.network/virtualnetworks/subnets') return {}
   const props = resource.properties ?? {}

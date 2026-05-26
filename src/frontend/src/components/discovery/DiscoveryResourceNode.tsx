@@ -2,7 +2,7 @@ import { memo } from 'react'
 import { Handle, Position, type NodeProps } from 'reactflow'
 import type { AzureResource } from '@/types/azure'
 import { getAzureIconForResourceType } from '@/utils/azureIconMap'
-import { getSubnetPrefixes, getVNetPrefixes } from '@/utils/azureResourceDetails'
+import { getSubnetPrefixes, getVNetPrefixes, getVmPrivateIps } from '@/utils/azureResourceDetails'
 
 /**
  * Maps a full Azure ARM resource `type` (e.g. `Microsoft.Network/virtualNetworks`)
@@ -41,7 +41,10 @@ interface NodeData extends AzureResource {
 function DiscoveryResourceNode({ data, selected }: NodeProps<NodeData>) {
   const cat = categorise(data.type)
   const iconSrc = getAzureIconForResourceType(data.type)
-  const prefix = getSubnetPrefixes(data)[0] ?? getVNetPrefixes(data)[0]
+  const prefix =
+    getSubnetPrefixes(data)[0] ??
+    getVNetPrefixes(data)[0] ??
+    getVmPrivateIps(data)[0]
   return (
     <div
       className={`relative bg-white rounded-xl shadow-md border-2 transition-all duration-150 w-52 ${
