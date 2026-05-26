@@ -2,6 +2,12 @@ import type { AzureResource } from '@/types/azure'
 
 type Obj = Record<string, unknown>
 
+function getCI(obj: Obj | null | undefined, key: string): unknown {
+  if (!obj) return undefined
+  const hit = Object.keys(obj).find((k) => k.toLowerCase() === key.toLowerCase())
+  return hit ? obj[hit] : undefined
+}
+
 function asObj(v: unknown): Obj | null {
   return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Obj) : null
 }
@@ -11,8 +17,19 @@ function asStr(v: unknown): string | null {
 }
 
 function asStrList(v: unknown): string[] {
-  if (!Array.isArray(v)) return []
-  return v.map(asStr).filter((x): x is string => !!x)
+  if (Array.isArray(v)) {
+    return v.map(asStr).filter((x): x is string => !!x)
+  }
+
+  // Some payloads can arrive as { $values: [...] } depending on serializer shape.
+  const obj = asObj(v)
+  const values = obj ? getCI(obj, '$values') : undefined
+  if (Array.isArray(values)) {
+    return values.map(asStr).filter((x): x is string => !!x)
+  }
+
+  const one = asStr(v)
+  return one ? [one] : []
 }
 
 function uniq(values: string[]): string[] {
@@ -22,36 +39,59 @@ function uniq(values: string[]): string[] {
 export function getVNetPrefixes(resource: AzureResource): string[] {
   if (resource.type.toLowerCase() !== 'microsoft.network/virtualnetworks') return []
   const props = resource.properties ?? {}
-  const addressSpace = asObj(props.addressSpace)
-  const fromAddressSpace = asStrList(addressSpace?.addressPrefixes)
-  const fromFlat = asStrList((props as Obj).addressPrefixes)
-  return uniq([...fromAddressSpace, ...fromFlat])
+  const p = props as Obj
+  const addressSpace = asObj(getCI(p, 'addressSpace'))
+  const fromAddressSpace = asStrList(getCI(addressSpace, 'addressPrefixes'))
+  const fromFlat = asStrList(getCI(p, 'addressPrefixes'))
+
+  // Last fallback: scan all nested objects for an addressPrefixes array.
+  const fromNested: string[] = []
+  const scan = (node: unknown, depth = 0) => {
+    if (depth > 4) return
+    const o = asObj(node)
+    if (!o) return
+    const maybe = asStrList(getCI(o, 'addressPrefixes'))
+    if (maybe.length > 0) fromNested.push(...maybe)
+    for (const value of Object.values(o)) {
+      if (Array.isArray(value)) {
+        for (const item of value) scan(item, depth + 1)
+      } else {
+        scan(value, depth + 1)
+      }
+    }
+  }
+  scan(p)
+
+  return uniq([...fromAddressSpace, ...fromFlat, ...fromNested])
 }
 
 export function getSubnetPrefixes(resource: AzureResource): string[] {
   if (resource.type.toLowerCase() !== 'microsoft.network/virtualnetworks/subnets') return []
   const props = resource.properties ?? {}
-  const one = asStr((props as Obj).addressPrefix)
-  const many = asStrList((props as Obj).addressPrefixes)
+  const p = props as Obj
+  const one = asStr(getCI(p, 'addressPrefix'))
+  const many = asStrList(getCI(p, 'addressPrefixes'))
   return uniq([...(one ? [one] : []), ...many])
 }
 
 export function getSubnetAssociations(resource: AzureResource): { nsgId?: string; routeTableId?: string } {
   if (resource.type.toLowerCase() !== 'microsoft.network/virtualnetworks/subnets') return {}
   const props = resource.properties ?? {}
-  const nsg = asObj((props as Obj).networkSecurityGroup)
-  const routeTable = asObj((props as Obj).routeTable)
+  const p = props as Obj
+  const nsg = asObj(getCI(p, 'networkSecurityGroup'))
+  const routeTable = asObj(getCI(p, 'routeTable'))
   return {
-    nsgId: asStr(nsg?.id) ?? asStr((props as Obj).networkSecurityGroupId) ?? undefined,
-    routeTableId: asStr(routeTable?.id) ?? asStr((props as Obj).routeTableId) ?? undefined,
+    nsgId: asStr(getCI(nsg, 'id')) ?? asStr(getCI(p, 'networkSecurityGroupId')) ?? undefined,
+    routeTableId: asStr(getCI(routeTable, 'id')) ?? asStr(getCI(p, 'routeTableId')) ?? undefined,
   }
 }
 
 export function getVNetDnsServers(resource: AzureResource): string[] {
   if (resource.type.toLowerCase() !== 'microsoft.network/virtualnetworks') return []
   const props = resource.properties ?? {}
-  const dhcp = asObj((props as Obj).dhcpOptions)
-  return asStrList(dhcp?.dnsServers)
+  const p = props as Obj
+  const dhcp = asObj(getCI(p, 'dhcpOptions'))
+  return asStrList(getCI(dhcp, 'dnsServers'))
 }
 
 export function shortResourceId(id: string | undefined): string {
