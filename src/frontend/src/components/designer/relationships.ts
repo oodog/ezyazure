@@ -34,7 +34,7 @@ export const containmentRules: Record<string, string[]> = {
     'Managed Identity','Bastion','Log Analytics','Defender for Cloud',
   ],
   VNet: ['Subnet'],
-  Subnet: ['Private Endpoint'],
+  Subnet: ['Private Endpoint', 'VM', 'VM Scale Set', 'Container App', 'AKS'],
   'Virtual WAN': ['Virtual Hub'],
   'Virtual Hub': ['Route Intent','Azure Firewall','VPN Gateway','ExpressRoute Gateway','NVA'],
 }
