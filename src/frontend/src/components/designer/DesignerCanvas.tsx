@@ -184,6 +184,48 @@ function CanvasInner() {
     [screenToFlowPosition, getIntersectingNodes, setNodes],
   )
 
+  // When an existing node is dragged and released, re-evaluate parent-child containment
+  const onNodeDragStop = useCallback(
+    (_event: React.MouseEvent, node: Node<DesignBlock>) => {
+      const blockType = node.data.blockType
+      // Only re-parent non-container resource nodes (containers like VNet don't get parented)
+      // and also containers that can be children (Subnet inside VNet)
+      const intersecting = getIntersectingNodes(node)
+      const candidates = intersecting.filter((n) => {
+        const t = (n.data as DesignBlock | undefined)?.blockType
+        return t && n.id !== node.id && isContainer(t) && canContain(t, blockType)
+      })
+      const newParent = candidates.length > 0 ? candidates[candidates.length - 1] : null
+
+      const currentParentId = node.parentId ?? (node as unknown as { parentNode?: string }).parentNode
+
+      if (newParent && newParent.id !== currentParentId) {
+        // Reparent: adjust position to be relative to new parent
+        const pAbs = newParent.positionAbsolute ?? newParent.position
+        const nodeAbs = node.positionAbsolute ?? node.position
+        const relPos = { x: nodeAbs.x - pAbs.x, y: nodeAbs.y - pAbs.y }
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === node.id
+              ? { ...n, position: relPos, parentId: newParent.id, extent: 'parent' as const }
+              : n,
+          ),
+        )
+      } else if (!newParent && currentParentId) {
+        // Dragged out of parent — remove parentId, use absolute position
+        const absPos = node.positionAbsolute ?? node.position
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === node.id
+              ? { ...n, position: absPos, parentId: undefined, extent: undefined }
+              : n,
+          ),
+        )
+      }
+    },
+    [getIntersectingNodes, setNodes],
+  )
+
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
@@ -420,6 +462,7 @@ function CanvasInner() {
             isValidConnection={isValidConnection}
             onDrop={onDrop}
             onDragOver={onDragOver}
+            onNodeDragStop={onNodeDragStop}
             onNodeClick={(_, node) => { setSelectedNodeId(node.id); setSelectedEdgeId(null) }}
             onEdgeClick={(_, edge) => { setSelectedEdgeId(edge.id); setSelectedNodeId(null) }}
             onPaneClick={() => { setSelectedNodeId(null); setSelectedEdgeId(null) }}
