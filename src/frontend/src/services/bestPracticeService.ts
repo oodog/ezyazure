@@ -67,7 +67,7 @@ export const bestPracticeService = {
         id: n.id,
         blockType: (n.data?.blockType as string) ?? (n.data?.type as string) ?? n.type ?? 'Unknown',
         label: (n.data?.label as string) ?? n.id,
-        parentId: n.parentNode ?? null,
+        parentId: n.parentId ?? n.parentNode ?? null,
         properties: (n.data?.properties as Record<string, unknown>) ?? {},
       })),
       edges: edges.map((e) => ({

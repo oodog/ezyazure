@@ -24,6 +24,8 @@ import { getBlockMeta, categoryStyles } from './blockMetadata'
 import { validateDesign, type ValidationFinding } from './validation'
 import { canConnect, canContain, isContainer, containerSize } from './relationships'
 import { bestPracticeService, type DesignFinding } from '@/services/bestPracticeService'
+import { generateBicep } from './bicepGenerator'
+import BicepModal from './BicepModal'
 import type { DesignBlock } from '@/types/designer'
 
 interface EdgeData {
@@ -58,6 +60,7 @@ function CanvasInner() {
   const [aiModel, setAiModel] = useState<string | null>(null)
   const [acknowledged, setAcknowledged] = useState<Set<string>>(new Set())
   const [toast, setToast] = useState<{ kind: 'error' | 'info'; msg: string } | null>(null)
+  const [bicepCode, setBicepCode] = useState<string | null>(null)
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, getIntersectingNodes } = useReactFlow()
 
@@ -171,7 +174,7 @@ function CanvasInner() {
         id,
         type: isCont ? 'azureContainer' : 'azureResource',
         position,
-        ...(parentId ? { parentId, extent } : {}),
+        ...(parentId ? { parentId, parentNode: parentId, extent } : {}),
         ...(isCont ? { style: { width: size.width, height: size.height }, zIndex: -1 } : {}),
         data: {
           label: blockType,
@@ -207,7 +210,7 @@ function CanvasInner() {
         setNodes((nds) =>
           nds.map((n) =>
             n.id === node.id
-              ? { ...n, position: relPos, parentId: newParent.id, extent: 'parent' as const }
+              ? { ...n, position: relPos, parentId: newParent.id, parentNode: newParent.id, extent: 'parent' as const }
               : n,
           ),
         )
@@ -217,7 +220,7 @@ function CanvasInner() {
         setNodes((nds) =>
           nds.map((n) =>
             n.id === node.id
-              ? { ...n, position: absPos, parentId: undefined, extent: undefined }
+              ? { ...n, position: absPos, parentId: undefined, parentNode: undefined, extent: undefined }
               : n,
           ),
         )
@@ -349,6 +352,15 @@ function CanvasInner() {
     })
   }
 
+  const handleGenerateBicep = () => {
+    if (nodes.length === 0) {
+      showToast('error', 'Add at least one block before generating Bicep.')
+      return
+    }
+    const code = generateBicep(nodes, edges)
+    setBicepCode(code)
+  }
+
   /** Stable key for a finding's acknowledgement state. */
   const ackKey = (f: ValidationFinding, idx: number) =>
     `${f.ruleId}::${f.nodeId ?? 'global'}::${idx}`
@@ -426,6 +438,7 @@ function CanvasInner() {
             </button>
 
             <button
+              onClick={handleGenerateBicep}
               disabled={deployGate.blocked}
               title={
                 deployGate.blocked
@@ -647,6 +660,10 @@ function CanvasInner() {
           onDelete={deleteEdge}
           onClose={() => setSelectedEdgeId(null)}
         />
+      )}
+
+      {bicepCode && (
+        <BicepModal bicep={bicepCode} onClose={() => setBicepCode(null)} />
       )}
     </div>
   )

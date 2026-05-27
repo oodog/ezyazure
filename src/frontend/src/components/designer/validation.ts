@@ -68,7 +68,10 @@ export function validateDesign(nodes: DesignNode[], _edges: Edge[]): ValidationF
 
   // ───────── Structural / containment rules ─────────
   const nodeById = new Map(nodes.map((n) => [n.id, n]))
-  const parentOf = (n: DesignNode) => (n.parentId ? nodeById.get(n.parentId) : undefined)
+  const parentOf = (n: DesignNode) => {
+    const pid = n.parentId ?? n.parentNode
+    return pid ? nodeById.get(pid) : undefined
+  }
   const parentTypeOf = (n: DesignNode) => (parentOf(n)?.data as { blockType?: string } | undefined)?.blockType
   for (const n of nodes) {
     const t = n.data.blockType
