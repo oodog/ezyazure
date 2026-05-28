@@ -8,6 +8,11 @@ function safeName(label: string): string {
   return label.replace(/[^a-zA-Z0-9]/g, '_').replace(/^_+|_+$/g, '') || 'resource'
 }
 
+/** Sanitize a display name into a valid Azure resource name (no spaces, valid chars only). */
+function safeResourceName(label: string): string {
+  return label.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9._-]/g, '').replace(/^[^a-zA-Z0-9]/, '').replace(/[^a-zA-Z0-9_]$/, '') || 'resource'
+}
+
 function prop(n: DesignNode, k: string): unknown {
   return n.data?.properties?.[k]
 }
@@ -20,7 +25,7 @@ function strProp(n: DesignNode, k: string): string {
 
 function genVNet(n: DesignNode, subnets: DesignNode[]): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   const space = (prop(n, 'addressSpace') as string[] | undefined) ?? []
   const cidr = space.length > 0 ? space : ['10.0.0.0/16']
 
@@ -28,10 +33,10 @@ function genVNet(n: DesignNode, subnets: DesignNode[]): string {
   if (subnets.length > 0) {
     const subs = subnets
       .map((s) => {
-        const sName = strProp(s, 'resourceName') || s.data.label
+        const sName = safeResourceName(strProp(s, 'resourceName') || s.data.label)
         const prefix = strProp(s, 'addressPrefix') || '10.0.0.0/24'
         const delegation = strProp(s, 'delegation')
-        const delegationBlock = delegation && delegation !== 'None'
+        const delegationBlock = delegation && delegation !== 'None' && delegation !== 'none'
           ? `\n        delegations: [\n          {\n            name: '${delegation}'\n            properties: {\n              serviceName: '${delegation}'\n            }\n          }\n        ]`
           : ''
         return `      {\n        name: '${sName}'\n        properties: {\n          addressPrefix: '${prefix}'${delegationBlock}\n        }\n      }`
@@ -55,7 +60,7 @@ ${cidr.map((c) => `        '${c}'`).join('\n')}
 
 function genNsg(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   return `resource ${name} 'Microsoft.Network/networkSecurityGroups@2024-01-01' = {
   name: '${rName}'
   location: location
@@ -67,7 +72,7 @@ function genNsg(n: DesignNode): string {
 
 function genRouteTable(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   return `resource ${name} 'Microsoft.Network/routeTables@2024-01-01' = {
   name: '${rName}'
   location: location
@@ -79,7 +84,7 @@ function genRouteTable(n: DesignNode): string {
 
 function genStorageAccount(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label).toLowerCase()
   const kind = strProp(n, 'kind') || 'StorageV2'
   const sku = strProp(n, 'skuName') || 'Standard_LRS'
   return `resource ${name} 'Microsoft.Storage/storageAccounts@2023-05-01' = {
@@ -98,7 +103,7 @@ function genStorageAccount(n: DesignNode): string {
 
 function genKeyVault(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   const sku = strProp(n, 'skuName') || 'standard'
   return `resource ${name} 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: '${rName}'
@@ -118,7 +123,7 @@ function genKeyVault(n: DesignNode): string {
 
 function genSqlDatabase(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   return `resource ${name}_server 'Microsoft.Sql/servers@2023-08-01-preview' = {
   name: '${rName}-server'
   location: location
@@ -141,7 +146,7 @@ resource ${name} 'Microsoft.Sql/servers/databases@2023-08-01-preview' = {
 
 function genPostgres(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   return `resource ${name} 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: '${rName}'
   location: location
@@ -161,7 +166,7 @@ function genPostgres(n: DesignNode): string {
 
 function genCosmosDb(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   return `resource ${name} 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
   name: '${rName}'
   location: location
@@ -183,7 +188,7 @@ function genCosmosDb(n: DesignNode): string {
 
 function genVm(n: DesignNode, parentSubnetName?: string, parentVNetName?: string): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   const vmSize = strProp(n, 'vmSize') || 'Standard_B2s'
   const osImage = strProp(n, 'osImage') || 'Canonical:ubuntu-24_04-lts:server:latest'
   const [publisher, offer, sku, version] = osImage.split(':')
@@ -191,7 +196,7 @@ function genVm(n: DesignNode, parentSubnetName?: string, parentVNetName?: string
   // Build subnet reference for the NIC
   let subnetProp = ''
   if (parentSubnetName && parentVNetName) {
-    subnetProp = `\n          subnet: {\n            id: resourceId('Microsoft.Network/virtualNetworks/subnets', '${parentVNetName}', '${parentSubnetName}')\n          }`
+    subnetProp = `\n          subnet: {\n            id: resourceId('Microsoft.Network/virtualNetworks/subnets', '${safeResourceName(parentVNetName)}', '${safeResourceName(parentSubnetName)}')\n          }`
   }
 
   return `resource ${name}_nic 'Microsoft.Network/networkInterfaces@2024-01-01' = {
@@ -232,7 +237,7 @@ resource ${name} 'Microsoft.Compute/virtualMachines@2024-07-01' = {
     }
     osProfile: {
       computerName: '${rName}'
-      adminUsername: 'azureuser'
+      adminUsername: adminUsername
     }
     networkProfile: {
       networkInterfaces: [
@@ -247,7 +252,7 @@ resource ${name} 'Microsoft.Compute/virtualMachines@2024-07-01' = {
 
 function genAppService(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   return `resource ${name}_plan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: '${rName}-plan'
   location: location
@@ -272,7 +277,7 @@ resource ${name} 'Microsoft.Web/sites@2023-12-01' = {
 
 function genContainerApp(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   return `// Container App requires a Container Apps Environment — add one if not present
 resource ${name} 'Microsoft.App/containerApps@2024-03-01' = {
   name: '${rName}'
@@ -302,7 +307,7 @@ resource ${name} 'Microsoft.App/containerApps@2024-03-01' = {
 
 function genFirewall(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   return `resource ${name}_pip 'Microsoft.Network/publicIPAddresses@2024-01-01' = {
   name: '${rName}-pip'
   location: location
@@ -339,7 +344,7 @@ resource ${name} 'Microsoft.Network/azureFirewalls@2024-01-01' = {
 
 function genLoadBalancer(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   return `resource ${name} 'Microsoft.Network/loadBalancers@2024-01-01' = {
   name: '${rName}'
   location: location
@@ -355,7 +360,7 @@ function genLoadBalancer(n: DesignNode): string {
 
 function genPrivateEndpoint(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   return `resource ${name} 'Microsoft.Network/privateEndpoints@2024-01-01' = {
   name: '${rName}'
   location: location
@@ -367,7 +372,7 @@ function genPrivateEndpoint(n: DesignNode): string {
 
 function genAks(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   return `resource ${name} 'Microsoft.ContainerService/managedClusters@2024-06-02-preview' = {
   name: '${rName}'
   location: location
@@ -390,7 +395,7 @@ function genAks(n: DesignNode): string {
 
 function genPrivateDnsZone(n: DesignNode): string {
   const name = safeName(n.data.label)
-  const rName = strProp(n, 'resourceName') || n.data.label
+  const rName = safeResourceName(strProp(n, 'resourceName') || n.data.label)
   return `resource ${name} 'Microsoft.Network/privateDnsZones@2024-06-01' = {
   name: '${rName}'
   location: 'global'
@@ -438,12 +443,18 @@ export function generateBicep(nodes: DesignNode[], _edges: Edge[]): string {
     return {}
   }
 
+  const hasVms = nodes.some((n) => n.data.blockType === 'VM')
+
   const lines: string[] = []
   lines.push(`// Generated by EasyAzure Environment Designer`)
   lines.push(`// ${new Date().toISOString()}\n`)
   lines.push(`targetScope = 'resourceGroup'\n`)
   lines.push(`@description('Azure region for all resources')`)
   lines.push(`param location string = resourceGroup().location\n`)
+  if (hasVms) {
+    lines.push(`@description('Admin username for virtual machines')`)
+    lines.push(`param adminUsername string\n`)
+  }
 
   // Generate resources
   for (const n of nodes) {
