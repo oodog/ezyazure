@@ -14,9 +14,11 @@ import ReactFlow, {
 import 'reactflow/dist/style.css'
 import { useParams } from 'react-router-dom'
 import { discoveryService } from '@/services/discoveryService'
+import type { RoutingAnalysisReport } from '@/services/discoveryService'
 import ResourcePanel from './ResourcePanel'
 import ReplicateDialog from './ReplicateDialog'
 import DiscoveryResourceNode from './DiscoveryResourceNode'
+import RoutingFindingsPanel from './RoutingFindingsPanel'
 import { useManualSubscriptions, isValidSubscriptionId } from '@/hooks/useManualSubscriptions'
 import type { AzureResource, FlowEdge as ApiFlowEdge, FlowNode as ApiFlowNode } from '@/types/azure'
 import { applyDagreLayout } from '@/utils/dagreLayout'
@@ -101,6 +103,13 @@ export default function DiscoveryView() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [replicateOpen, setReplicateOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Routing analysis (asymmetric routing detection + optional AI remediation)
+  const [routingReport, setRoutingReport] = useState<RoutingAnalysisReport | null>(null)
+  const [routingOpen, setRoutingOpen] = useState(false)
+  const [routingLoading, setRoutingLoading] = useState(false)
+  const [routingAiLoading, setRoutingAiLoading] = useState(false)
+  const [highlightNodeIds, setHighlightNodeIds] = useState<string[]>([])
 
   useEffect(() => {
     discoveryService.listSubscriptions().then(setApiSubs).catch((e) => {
@@ -191,6 +200,33 @@ export default function DiscoveryView() {
     }
   }, [selectedSubIds, setNodes, setEdges])
 
+  const analyzeRouting = useCallback(
+    async (useAi: boolean) => {
+      if (selectedSubIds.length === 0) return
+      if (useAi) setRoutingAiLoading(true)
+      else setRoutingLoading(true)
+      setError(null)
+      try {
+        const report = await discoveryService.analyzeRouting(selectedSubIds, useAi)
+        setRoutingReport(report)
+        setRoutingOpen(true)
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Routing analysis failed.')
+      } finally {
+        setRoutingLoading(false)
+        setRoutingAiLoading(false)
+      }
+    },
+    [selectedSubIds],
+  )
+
+  // Highlight the nodes a finding refers to, and dim everything else.
+  const focusFinding = useCallback((nodeIds: string[]) => {
+    setHighlightNodeIds(nodeIds.map((id) => id.toLowerCase()))
+    setSelectedNodeId(null)
+    setSelectedResource(null)
+  }, [])
+
   const onConnect = useCallback(
     (params: Connection) => setEdges((eds) => addEdge(params, eds)),
     [setEdges],
@@ -259,6 +295,26 @@ export default function DiscoveryView() {
       }
     })
   }, [edges, selectedNodeId, selectedResource])
+
+  // When a routing finding is focused, dim every node except the affected ones
+  // and outline the affected nodes so the user can locate them on the canvas.
+  const renderedNodes = useMemo(() => {
+    if (highlightNodeIds.length === 0) return nodes
+    const set = new Set(highlightNodeIds)
+    return nodes.map((n) => {
+      const on = set.has(n.id)
+      return {
+        ...n,
+        style: {
+          ...(n.style ?? {}),
+          opacity: on ? 1 : 0.25,
+          outline: on ? '3px solid #dc2626' : undefined,
+          outlineOffset: on ? '2px' : undefined,
+          borderRadius: on ? 8 : (n.style?.borderRadius as number | undefined),
+        },
+      }
+    })
+  }, [nodes, highlightNodeIds])
 
   return (
     <div className="flex h-full gap-4">
@@ -370,6 +426,14 @@ export default function DiscoveryView() {
           >
             Replicate to new subscription
           </button>
+          <button
+            onClick={() => analyzeRouting(false)}
+            disabled={selectedSubIds.length === 0 || nodes.length === 0 || routingLoading}
+            title="Detect asymmetric routing and forced-tunnel mismatches across VNet peerings."
+            className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
+          >
+            {routingLoading ? 'Analyzing…' : 'Analyze routing'}
+          </button>
         </div>
         {error && (
           <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">
@@ -378,7 +442,7 @@ export default function DiscoveryView() {
         )}
         <div className="flex-1 bg-white border border-gray-200 rounded-xl overflow-hidden">
           <ReactFlow
-            nodes={nodes}
+            nodes={renderedNodes}
             edges={renderedEdges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
@@ -387,6 +451,7 @@ export default function DiscoveryView() {
             onNodeClick={(_, node) => {
               setSelectedNodeId(node.id)
               setSelectedResource(node.data as AzureResource)
+              setHighlightNodeIds([])
             }}
             fitView
           >
@@ -410,6 +475,19 @@ export default function DiscoveryView() {
           onClose={() => {
             setSelectedResource(null)
             setSelectedNodeId(null)
+          }}
+        />
+      )}
+      {routingOpen && routingReport && (
+        <RoutingFindingsPanel
+          report={routingReport}
+          aiLoading={routingAiLoading}
+          highlightNodeIds={highlightNodeIds}
+          onFocusFinding={focusFinding}
+          onAskAi={() => analyzeRouting(true)}
+          onClose={() => {
+            setRoutingOpen(false)
+            setHighlightNodeIds([])
           }}
         />
       )}

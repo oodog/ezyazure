@@ -11,11 +11,16 @@ namespace EasyAzure.Api.Controllers;
 public class DiscoveryController : ControllerBase
 {
     private readonly IDiscoveryService _discovery;
+    private readonly IRoutingAnalysisService _routing;
     private readonly ILogger<DiscoveryController> _logger;
 
-    public DiscoveryController(IDiscoveryService discovery, ILogger<DiscoveryController> logger)
+    public DiscoveryController(
+        IDiscoveryService discovery,
+        IRoutingAnalysisService routing,
+        ILogger<DiscoveryController> logger)
     {
         _discovery = discovery;
+        _routing = routing;
         _logger = logger;
     }
 
@@ -79,5 +84,24 @@ public class DiscoveryController : ControllerBase
         var status = await _discovery.GetJobStatusAsync(jobId, ct);
         if (status is null) return NotFound();
         return Ok(status);
+    }
+
+    /// <summary>
+    /// Analyses the discovered topology for routing issues — primarily asymmetric routing
+    /// across VNet peerings and forced-tunnel mismatches. When <c>useAi</c> is true and Azure
+    /// OpenAI is configured, each finding is enriched with AI-recommended remediation steps.
+    /// </summary>
+    [HttpPost("analyze-routing")]
+    public async Task<ActionResult<RoutingAnalysisReport>> AnalyzeRouting(
+        [FromBody] RoutingAnalysisRequest request, CancellationToken ct)
+    {
+        if (request?.SubscriptionIds is null || request.SubscriptionIds.Count == 0)
+        {
+            return BadRequest(new { error = "At least one subscriptionId is required." });
+        }
+
+        var graph = await _discovery.GetTopologyMultiAsync(request.SubscriptionIds, ct);
+        var report = await _routing.AnalyzeAsync(graph, request.UseAi, ct);
+        return Ok(report);
     }
 }

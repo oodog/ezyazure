@@ -29,6 +29,7 @@ builder.Services.AddScoped<ITopologyService, TopologyService>();
 builder.Services.AddScoped<IDataPathService, DataPathService>();
 builder.Services.AddScoped<IDesignerService, DesignerService>();
 builder.Services.AddScoped<IBestPracticeEngine, BestPracticeEngine>();
+builder.Services.AddScoped<IRoutingAnalysisService, RoutingAnalysisService>();
 builder.Services.AddScoped<IBicepGeneratorService, BicepGeneratorService>();
 builder.Services.AddScoped<IDeploymentService, DeploymentService>();
 builder.Services.AddScoped<IReplicationService, ReplicationService>();

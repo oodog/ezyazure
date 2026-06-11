@@ -40,6 +40,17 @@ public interface IBestPracticeEngine
     Task<DesignValidationReport> ValidateDesignAsync(DesignValidationRequest request, CancellationToken ct = default);
 }
 
+public interface IRoutingAnalysisService
+{
+    /// <summary>
+    /// Analyses a topology graph for routing issues (asymmetric routing across peerings,
+    /// forced-tunnel mismatches, unverified NVA next hops). When <paramref name="useAi"/>
+    /// is true and Azure OpenAI is configured, each finding is enriched with AI-recommended
+    /// remediation steps.
+    /// </summary>
+    Task<RoutingAnalysisReport> AnalyzeAsync(TopologyGraph graph, bool useAi, CancellationToken ct = default);
+}
+
 public interface IReplicationService
 {
     /// <summary>

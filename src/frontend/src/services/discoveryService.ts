@@ -42,6 +42,26 @@ export interface ReplicationPlan {
   deploymentStackName: string
 }
 
+export interface RoutingFinding {
+  severity: string
+  ruleId: string
+  title: string
+  message: string
+  affectedNodeIds: string[]
+  recommendation?: string
+  aiRecommendation?: string
+  reference?: string
+  source: string
+}
+
+export interface RoutingAnalysisReport {
+  findings: RoutingFinding[]
+  aiUsed: boolean
+  aiModel?: string
+  subnetsAnalyzed: number
+  runAt: string
+}
+
 export const discoveryService = {
   getDashboardStats: async (): Promise<DashboardStats> => {
     const { data } = await apiClient.get<DashboardStats>('/discovery/dashboard')
@@ -96,6 +116,22 @@ export const discoveryService = {
    */
   replicatePlan: async (req: ReplicationPlanRequest): Promise<ReplicationPlan> => {
     const { data } = await apiClient.post<ReplicationPlan>('/replication/plan', req)
+    return data
+  },
+
+  /**
+   * Analyses the discovered topology for routing issues — primarily asymmetric routing
+   * across VNet peerings and forced-tunnel mismatches. When useAi is true and Azure
+   * OpenAI is configured, findings are enriched with AI-recommended remediation steps.
+   */
+  analyzeRouting: async (
+    subscriptionIds: string[],
+    useAi: boolean,
+  ): Promise<RoutingAnalysisReport> => {
+    const { data } = await apiClient.post<RoutingAnalysisReport>('/discovery/analyze-routing', {
+      subscriptionIds,
+      useAi,
+    })
     return data
   },
 }
