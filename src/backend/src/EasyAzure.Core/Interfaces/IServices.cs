@@ -22,6 +22,14 @@ public interface ITopologyService
 public interface IDataPathService
 {
     Task<DataPathResult> AnalyzeAsync(DataPathRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// Traces a data path through an already-built topology graph and returns the ordered
+    /// path (including the node IDs to highlight on the map). Resolves the destination
+    /// (resource ID or raw IP) to a subnet, walks UDR/peering/firewall next hops, and
+    /// evaluates NSG rules at the source and destination.
+    /// </summary>
+    Task<DataPathResult> TraceOnGraphAsync(TopologyGraph graph, DataPathGraphRequest request, CancellationToken ct = default);
 }
 
 public interface IDesignerService
@@ -49,6 +57,19 @@ public interface IRoutingAnalysisService
     /// remediation steps.
     /// </summary>
     Task<RoutingAnalysisReport> AnalyzeAsync(TopologyGraph graph, bool useAi, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Persists and compares discovery snapshots (versioning). Snapshots are stored in blob
+/// storage so customers can review how their environment changed between discoveries.
+/// </summary>
+public interface ISnapshotService
+{
+    Task<DiscoverySnapshotSummary> SaveAsync(SaveSnapshotRequest request, CancellationToken ct = default);
+    Task<IReadOnlyList<DiscoverySnapshotSummary>> ListAsync(CancellationToken ct = default);
+    Task<DiscoverySnapshot?> GetAsync(string id, CancellationToken ct = default);
+    Task<DiscoveryDiff?> DiffAsync(string fromId, string toId, CancellationToken ct = default);
+    Task<bool> DeleteAsync(string id, CancellationToken ct = default);
 }
 
 public interface IReplicationService

@@ -62,6 +62,64 @@ export interface RoutingAnalysisReport {
   runAt: string
 }
 
+export interface PathHop {
+  resourceId: string
+  resourceName: string
+  resourceType: string
+  detail?: string
+  matchedRule?: string
+}
+
+export type PathStatus = 'Allowed' | 'Blocked' | 'Unknown'
+
+export interface DataPathResult {
+  status: PathStatus
+  blockingRule?: string
+  hops: PathHop[]
+  riskNotes: string[]
+  bestPracticeNotes: string[]
+  pathNodeIds: string[]
+  destinationSummary?: string
+}
+
+export interface DiscoverySnapshotSummary {
+  id: string
+  capturedAt: string
+  subscriptionIds: string[]
+  label?: string
+  nodeCount: number
+  edgeCount: number
+}
+
+export interface DiffResource {
+  id: string
+  name: string
+  type: string
+}
+
+export interface DiffField {
+  path: string
+  oldValue?: string
+  newValue?: string
+}
+
+export interface DiffChangedResource {
+  id: string
+  name: string
+  type: string
+  changes: DiffField[]
+}
+
+export interface DiscoveryDiff {
+  fromSnapshotId: string
+  toSnapshotId: string
+  fromCapturedAt: string
+  toCapturedAt: string
+  added: DiffResource[]
+  removed: DiffResource[]
+  changed: DiffChangedResource[]
+}
+
 export const discoveryService = {
   getDashboardStats: async (): Promise<DashboardStats> => {
     const { data } = await apiClient.get<DashboardStats>('/discovery/dashboard')
@@ -131,6 +189,50 @@ export const discoveryService = {
     const { data } = await apiClient.post<RoutingAnalysisReport>('/discovery/analyze-routing', {
       subscriptionIds,
       useAi,
+    })
+    return data
+  },
+
+  /**
+   * Traces a data path through the discovered topology. The destination may be a full
+   * ARM resource ID or a raw IPv4 address. Returns the ordered hops plus the node IDs
+   * that make up the path so the Discovery map can highlight the exact route.
+   */
+  tracePath: async (req: {
+    subscriptionIds: string[]
+    sourceResourceId: string
+    destination: string
+    protocol: string
+    destinationPort: number
+  }): Promise<DataPathResult> => {
+    const { data } = await apiClient.post<DataPathResult>('/discovery/trace-path', req)
+    return data
+  },
+
+  /**
+   * Discovery versioning — captures a point-in-time snapshot of the discovered topology so
+   * customers can compare how their environment changed between discoveries.
+   */
+  saveSnapshot: async (req: {
+    subscriptionIds: string[]
+    label?: string
+  }): Promise<DiscoverySnapshotSummary> => {
+    const { data } = await apiClient.post<DiscoverySnapshotSummary>('/discovery/snapshots', req)
+    return data
+  },
+
+  listSnapshots: async (): Promise<DiscoverySnapshotSummary[]> => {
+    const { data } = await apiClient.get<DiscoverySnapshotSummary[]>('/discovery/snapshots')
+    return data
+  },
+
+  deleteSnapshot: async (id: string): Promise<void> => {
+    await apiClient.delete(`/discovery/snapshots/${id}`)
+  },
+
+  diffSnapshots: async (from: string, to: string): Promise<DiscoveryDiff> => {
+    const { data } = await apiClient.get<DiscoveryDiff>('/discovery/snapshots/diff', {
+      params: { from, to },
     })
     return data
   },

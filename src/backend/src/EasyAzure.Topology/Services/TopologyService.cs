@@ -63,6 +63,7 @@ public class TopologyService : ITopologyService
         // the richest available shape.
         allResources = ConsolidateResources(allResources);
         await EnrichSubnetsFromArmAsync(allResources, ct);
+        await EnrichRouteTablesFromArmAsync(allResources, ct);
         EnrichVmPrivateIps(allResources, networkInterfaces);
         EnrichFirewallPrivateIps(allResources);
         EnsureInternetNode(allResources);
@@ -165,6 +166,65 @@ public class TopologyService : ITopologyService
             }
 
             byId[s.Id] = new AzureResource
+            {
+                Id = current.Id,
+                Name = current.Name,
+                Type = current.Type,
+                Location = current.Location,
+                ResourceGroup = current.ResourceGroup,
+                SubscriptionId = current.SubscriptionId,
+                Properties = dict,
+                Tags = current.Tags,
+            };
+        }).ToArray();
+
+        await Task.WhenAll(fetches);
+
+        for (var i = 0; i < resources.Count; i++)
+        {
+            if (byId.TryGetValue(resources[i].Id, out var updated))
+            {
+                resources[i] = updated;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Re-hydrates route tables from ARM REST so their <c>routes</c> and <c>subnets</c>
+    /// (association) collections are authoritative. Azure Resource Graph sometimes returns
+    /// route tables without their nested routes/subnet links, which breaks routing analysis
+    /// (asymmetric route detection depends on seeing the actual route entries + associations).
+    /// </summary>
+    private async Task EnrichRouteTablesFromArmAsync(List<AzureResource> resources, CancellationToken ct)
+    {
+        var routeTables = resources
+            .Where(r => string.Equals(r.Type, "Microsoft.Network/routeTables", StringComparison.OrdinalIgnoreCase))
+            .Where(r => !string.IsNullOrWhiteSpace(r.Id) && r.Id.StartsWith("/", StringComparison.Ordinal))
+            .ToList();
+
+        if (routeTables.Count == 0) return;
+
+        _logger.LogInformation("Enriching {Count} route table(s) from ARM REST", routeTables.Count);
+
+        var byId = resources.ToDictionary(r => r.Id, StringComparer.OrdinalIgnoreCase);
+
+        var fetches = routeTables.Select(async rt =>
+        {
+            var arm = await _resourceGraph.GetArmResourceAsync(rt.Id, "2024-05-01", ct);
+            if (arm is null) return;
+            var armProps = arm["properties"] as JObject;
+            if (armProps is null) return;
+            if (!byId.TryGetValue(rt.Id, out var current)) return;
+
+            var dict = new Dictionary<string, object>(current.Properties, StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in armProps.Properties())
+            {
+                if (prop.Value is null || prop.Value.Type == JTokenType.Null) continue;
+                var native = ResourceGraphService.NormalizeJTokenToNative(prop.Value);
+                if (native is not null) dict[prop.Name] = native;
+            }
+
+            byId[rt.Id] = new AzureResource
             {
                 Id = current.Id,
                 Name = current.Name,

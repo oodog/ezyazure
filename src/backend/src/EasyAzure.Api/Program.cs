@@ -37,6 +37,7 @@ builder.Services.AddScoped<IRoutingAnalysisService, RoutingAnalysisService>();
 builder.Services.AddScoped<IBicepGeneratorService, BicepGeneratorService>();
 builder.Services.AddScoped<IDeploymentService, DeploymentService>();
 builder.Services.AddScoped<IReplicationService, ReplicationService>();
+builder.Services.AddScoped<ISnapshotService, SnapshotService>();
 
 // ProblemDetails ensures unhandled exceptions return a JSON payload (with CORS
 // headers attached by UseCors) rather than an empty 500 that the browser

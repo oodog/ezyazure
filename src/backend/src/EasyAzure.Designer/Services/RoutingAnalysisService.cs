@@ -176,6 +176,64 @@ public class RoutingAnalysisService : IRoutingAnalysisService
             }
         }
 
+        // ── Broadened indices for specific-prefix UDR asymmetry ──
+        // Address space per VNet and per subnet (used for CIDR-overlap reasoning).
+        var vnetPrefixes = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var v in nodes.Where(n => TypeIs(n, VNetType)))
+        {
+            var prefixes = GetVNetAddressPrefixes(v.Data).ToList();
+            if (prefixes.Count > 0) vnetPrefixes[v.Id] = prefixes;
+        }
+        var subnetPrefixes = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in subnets)
+        {
+            var prefixes = GetSubnetAddressPrefixes(s.Data).ToList();
+            if (prefixes.Count > 0) subnetPrefixes[s.Id] = prefixes;
+        }
+
+        // All NVA/appliance routes (ANY destination prefix, not just 0.0.0.0/0) per subnet,
+        // derived from each subnet's associated route table. This is what catches the
+        // "I added a route to steer specific traffic through the firewall" asymmetry case.
+        var nvaRoutesBySubnet = new Dictionary<string, List<(string Prefix, string Ip, string Name)>>(StringComparer.OrdinalIgnoreCase);
+        var allNvaNextHopIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var rtNodeById = nodes.Where(n => TypeIs(n, RouteTableType))
+            .GroupBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        foreach (var (subnetId, rtId) in subnetToRouteTable)
+        {
+            if (!rtNodeById.TryGetValue(rtId, out var rtNode)) continue;
+            foreach (var (prefix, nextHopType, nextHopIp, name) in ParseRoutes(rtNode.Data))
+            {
+                var isNva = string.Equals(nextHopType, "VirtualAppliance", StringComparison.OrdinalIgnoreCase)
+                    || !string.IsNullOrWhiteSpace(nextHopIp);
+                if (!isNva) continue;
+                (nvaRoutesBySubnet.TryGetValue(subnetId, out var l) ? l : nvaRoutesBySubnet[subnetId] = [])
+                    .Add((prefix, nextHopIp, name));
+                if (!string.IsNullOrWhiteSpace(nextHopIp)) allNvaNextHopIps.Add(nextHopIp);
+            }
+        }
+
+        // Does any subnet in `vnet` steer traffic destined for `targetPrefixes` through an NVA?
+        // Returns the (subnetId, nextHopIp) of the first such route, or null.
+        (string SubnetId, string Ip)? VNetSteersToNvaFor(string vnet, IReadOnlyList<string> targetPrefixes)
+        {
+            foreach (var s in subnets)
+            {
+                if (!string.Equals(VNetOf(s.Id), vnet, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!nvaRoutesBySubnet.TryGetValue(s.Id, out var routes)) continue;
+                foreach (var (prefix, ip, _) in routes)
+                {
+                    // 0.0.0.0/0 covers everything; otherwise require CIDR overlap with the target.
+                    if (string.Equals(prefix, "0.0.0.0/0", StringComparison.Ordinal)
+                        || targetPrefixes.Any(tp => CidrOverlaps(prefix, tp)))
+                    {
+                        return (s.Id, ip);
+                    }
+                }
+            }
+            return null;
+        }
+
         // ── RULE RT-ASYM-001: Asymmetric routing across VNet peering ──
         // Peered VNets where one side forces tunneling through an NVA/firewall and the other
         // routes directly. Inter-VNet traffic is asymmetric: forward via firewall, return direct.
@@ -260,6 +318,80 @@ public class RoutingAnalysisService : IRoutingAnalysisService
                 Recommendation =
                     "Standardise the egress posture across subnets that communicate with each other, or add explicit " +
                     "UDRs so both directions of inter-subnet flows traverse the same appliance.",
+                Reference = LearnUdr,
+                Source = "rule",
+            });
+        }
+
+        // ── RULE RT-ASYM-004: One-way UDR steering across a peering (specific-prefix asymmetry) ──
+        // This is the classic "I added a route on one side only" mistake: VNet A has a UDR that
+        // sends traffic destined for VNet B through a firewall/NVA, but VNet B has no matching
+        // route to send the return traffic for VNet A back through the same appliance. The
+        // appliance is stateful, so it sees the forward packets, the asymmetric return bypasses
+        // it, and the flow is dropped. Works for any destination prefix, not just 0.0.0.0/0.
+        foreach (var (a, b) in peerings)
+        {
+            var aPrefixes = vnetPrefixes.GetValueOrDefault(a, []);
+            var bPrefixes = vnetPrefixes.GetValueOrDefault(b, []);
+
+            var aSteersForB = bPrefixes.Count > 0 ? VNetSteersToNvaFor(a, bPrefixes) : null;
+            var bSteersForA = aPrefixes.Count > 0 ? VNetSteersToNvaFor(b, aPrefixes) : null;
+
+            // Asymmetric when exactly one side steers the cross-VNet traffic through an NVA.
+            if ((aSteersForB is not null) == (bSteersForA is not null)) continue;
+
+            var steeringVnet = aSteersForB is not null ? a : b;
+            var otherVnet = aSteersForB is not null ? b : a;
+            var steer = (aSteersForB ?? bSteersForA)!.Value;
+            var affected = new List<string> { steeringVnet, otherVnet, steer.SubnetId };
+
+            findings.Add(new RoutingFinding
+            {
+                Severity = "warning",
+                RuleId = "RT-ASYM-004",
+                Title = "One-way route steering across VNet peering",
+                Message =
+                    $"VNet \"{NameOf(steeringVnet)}\" has a user-defined route that sends traffic destined for " +
+                    $"\"{NameOf(otherVnet)}\" through a network virtual appliance" +
+                    (string.IsNullOrWhiteSpace(steer.Ip) ? string.Empty : $" ({steer.Ip})") +
+                    $", but \"{NameOf(otherVnet)}\" has no matching route to send return traffic back through the " +
+                    "same appliance. The forward path traverses the stateful appliance and the return path bypasses " +
+                    "it, so the appliance sees only one direction of the flow and drops it.",
+                AffectedNodeIds = affected.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                Recommendation =
+                    $"Add a user-defined route on the subnets in \"{NameOf(otherVnet)}\" for \"{NameOf(steeringVnet)}\"'s " +
+                    "address ranges with the same virtual appliance as the next hop, so both directions of the flow " +
+                    "traverse the same stateful device.",
+                Reference = LearnUdr,
+                Source = "rule",
+            });
+        }
+
+        // ── RULE RT-NVA-001: UDR next hop does not match any discovered appliance ──
+        // A route points at a virtual-appliance IP that is not the private IP of any discovered
+        // Azure Firewall. The next hop may be a third-party NVA (fine) or a stale/typo'd IP that
+        // blackholes traffic. Flag it so the user can confirm.
+        foreach (var ip in allNvaNextHopIps)
+        {
+            if (firewallIps.Contains(ip)) continue;
+            var affected = nvaRoutesBySubnet
+                .Where(kv => kv.Value.Any(r => string.Equals(r.Ip, ip, StringComparison.OrdinalIgnoreCase)))
+                .Select(kv => kv.Key)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            findings.Add(new RoutingFinding
+            {
+                Severity = "info",
+                RuleId = "RT-NVA-001",
+                Title = "Route next hop is not a discovered firewall",
+                Message =
+                    $"One or more user-defined routes send traffic to next-hop appliance {ip}, which is not the " +
+                    "private IP of any discovered Azure Firewall. If this is not an intentional third-party NVA, the " +
+                    "route may blackhole traffic, and return paths cannot be verified for symmetry.",
+                AffectedNodeIds = affected,
+                Recommendation =
+                    $"Confirm an appliance actually owns {ip} and that it has a symmetric return route to each " +
+                    "source subnet. Remove or correct the route if the appliance no longer exists.",
                 Reference = LearnUdr,
                 Source = "rule",
             });
@@ -517,6 +649,72 @@ public class RoutingAnalysisService : IRoutingAnalysisService
             if (string.IsNullOrWhiteSpace(prefix)) continue;
             yield return (prefix, nextHopType, nextHopIp, name);
         }
+    }
+
+    /// <summary>Reads a VNet's address space prefixes from properties.addressSpace.addressPrefixes.</summary>
+    private static IEnumerable<string> GetVNetAddressPrefixes(AzureResource? vnet)
+    {
+        if (vnet?.Properties is null) yield break;
+        if (vnet.Properties.TryGetValue("addressSpace", out var asRaw) && asRaw is IDictionary<string, object> asObj
+            && asObj.TryGetValue("addressPrefixes", out var apRaw) && apRaw is IEnumerable<object> apList)
+        {
+            foreach (var p in apList)
+            {
+                var s = p?.ToString();
+                if (!string.IsNullOrWhiteSpace(s)) yield return s;
+            }
+        }
+    }
+
+    /// <summary>Reads a subnet's address prefix(es) from properties.addressPrefix / addressPrefixes.</summary>
+    private static IEnumerable<string> GetSubnetAddressPrefixes(AzureResource? subnet)
+    {
+        if (subnet?.Properties is null) yield break;
+        if (subnet.Properties.TryGetValue("addressPrefix", out var single) && single is string s && !string.IsNullOrWhiteSpace(s))
+            yield return s;
+        if (subnet.Properties.TryGetValue("addressPrefixes", out var raw) && raw is IEnumerable<object> list)
+        {
+            foreach (var p in list)
+            {
+                var ps = p?.ToString();
+                if (!string.IsNullOrWhiteSpace(ps)) yield return ps;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns true if two IPv4 CIDR ranges overlap (either contains the other or they intersect).
+    /// Returns false for unparseable / IPv6 inputs (we conservatively skip rather than false-positive).
+    /// </summary>
+    private static bool CidrOverlaps(string cidrA, string cidrB)
+    {
+        if (!TryParseCidr(cidrA, out var baseA, out var maskA)) return false;
+        if (!TryParseCidr(cidrB, out var baseB, out var maskB)) return false;
+        var mask = maskA & maskB; // the shorter (less-specific) of the two masks
+        return (baseA & mask) == (baseB & mask);
+    }
+
+    private static bool TryParseCidr(string cidr, out uint baseAddr, out uint mask)
+    {
+        baseAddr = 0;
+        mask = 0;
+        if (string.IsNullOrWhiteSpace(cidr)) return false;
+        var slash = cidr.IndexOf('/');
+        if (slash < 0) return false;
+        var ipPart = cidr[..slash];
+        var prefixPart = cidr[(slash + 1)..];
+        if (!int.TryParse(prefixPart, out var prefixLen) || prefixLen < 0 || prefixLen > 32) return false;
+        var octets = ipPart.Split('.');
+        if (octets.Length != 4) return false; // IPv4 only
+        uint addr = 0;
+        foreach (var oct in octets)
+        {
+            if (!byte.TryParse(oct, out var b)) return false;
+            addr = (addr << 8) | b;
+        }
+        mask = prefixLen == 0 ? 0u : 0xFFFFFFFFu << (32 - prefixLen);
+        baseAddr = addr & mask;
+        return true;
     }
 
     /// <summary>Compact, AI-friendly summary of the routing-relevant parts of the topology.</summary>

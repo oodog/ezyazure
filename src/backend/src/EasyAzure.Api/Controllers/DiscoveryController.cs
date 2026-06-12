@@ -12,15 +12,18 @@ public class DiscoveryController : ControllerBase
 {
     private readonly IDiscoveryService _discovery;
     private readonly IRoutingAnalysisService _routing;
+    private readonly IDataPathService _dataPath;
     private readonly ILogger<DiscoveryController> _logger;
 
     public DiscoveryController(
         IDiscoveryService discovery,
         IRoutingAnalysisService routing,
+        IDataPathService dataPath,
         ILogger<DiscoveryController> logger)
     {
         _discovery = discovery;
         _routing = routing;
+        _dataPath = dataPath;
         _logger = logger;
     }
 
@@ -103,5 +106,28 @@ public class DiscoveryController : ControllerBase
         var graph = await _discovery.GetTopologyMultiAsync(request.SubscriptionIds, ct);
         var report = await _routing.AnalyzeAsync(graph, request.UseAi, ct);
         return Ok(report);
+    }
+
+    /// <summary>
+    /// Traces a data path through the discovered topology so the Discovery map can highlight
+    /// the exact route between a source VM and a destination (resource ID or IP address).
+    /// Returns ordered hops, NSG evaluation, risk notes, and the node IDs to highlight.
+    /// </summary>
+    [HttpPost("trace-path")]
+    public async Task<ActionResult<DataPathResult>> TracePath(
+        [FromBody] DataPathGraphRequest request, CancellationToken ct)
+    {
+        if (request?.SubscriptionIds is null || request.SubscriptionIds.Count == 0)
+        {
+            return BadRequest(new { error = "At least one subscriptionId is required." });
+        }
+        if (string.IsNullOrWhiteSpace(request.SourceResourceId) || string.IsNullOrWhiteSpace(request.Destination))
+        {
+            return BadRequest(new { error = "Both a source resource and a destination are required." });
+        }
+
+        var graph = await _discovery.GetTopologyMultiAsync(request.SubscriptionIds, ct);
+        var result = await _dataPath.TraceOnGraphAsync(graph, request, ct);
+        return Ok(result);
     }
 }

@@ -14,11 +14,13 @@ import ReactFlow, {
 import 'reactflow/dist/style.css'
 import { useParams } from 'react-router-dom'
 import { discoveryService } from '@/services/discoveryService'
-import type { RoutingAnalysisReport } from '@/services/discoveryService'
+import type { RoutingAnalysisReport, DataPathResult } from '@/services/discoveryService'
 import ResourcePanel from './ResourcePanel'
 import ReplicateDialog from './ReplicateDialog'
 import DiscoveryResourceNode from './DiscoveryResourceNode'
 import RoutingFindingsPanel from './RoutingFindingsPanel'
+import DataPathPanel from './DataPathPanel'
+import VersionHistoryPanel from './VersionHistoryPanel'
 import { useManualSubscriptions, isValidSubscriptionId } from '@/hooks/useManualSubscriptions'
 import type { AzureResource, FlowEdge as ApiFlowEdge, FlowNode as ApiFlowNode } from '@/types/azure'
 import { applyDagreLayout } from '@/utils/dagreLayout'
@@ -110,6 +112,16 @@ export default function DiscoveryView() {
   const [routingLoading, setRoutingLoading] = useState(false)
   const [routingAiLoading, setRoutingAiLoading] = useState(false)
   const [highlightNodeIds, setHighlightNodeIds] = useState<string[]>([])
+
+  // Data-path tracer (searchable source VM + destination IP/resource id)
+  const [dataPathOpen, setDataPathOpen] = useState(false)
+  const [dataPathResult, setDataPathResult] = useState<DataPathResult | null>(null)
+  const [dataPathLoading, setDataPathLoading] = useState(false)
+  const [dataPathError, setDataPathError] = useState<string | null>(null)
+  const [pathNodeIds, setPathNodeIds] = useState<string[]>([])
+
+  // Discovery versioning (persisted snapshots + diff)
+  const [versionOpen, setVersionOpen] = useState(false)
 
   useEffect(() => {
     discoveryService.listSubscriptions().then(setApiSubs).catch((e) => {
@@ -227,6 +239,51 @@ export default function DiscoveryView() {
     setSelectedResource(null)
   }, [])
 
+  // Source VMs available for the data-path tracer.
+  const vmOptions = useMemo(
+    () =>
+      nodes
+        .filter((n) => n.data?.type?.toLowerCase() === 'microsoft.compute/virtualmachines')
+        .map((n) => ({
+          id: n.id,
+          name: n.data?.name ?? n.id,
+          resourceGroup: n.data?.resourceGroup ?? '',
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [nodes],
+  )
+
+  const tracePath = useCallback(
+    async (req: {
+      sourceResourceId: string
+      destination: string
+      protocol: string
+      destinationPort: number
+    }) => {
+      if (selectedSubIds.length === 0) return
+      setDataPathLoading(true)
+      setDataPathError(null)
+      try {
+        const result = await discoveryService.tracePath({
+          subscriptionIds: selectedSubIds,
+          ...req,
+        })
+        setDataPathResult(result)
+        // Highlight the traced path on the map.
+        const ids = (result.pathNodeIds ?? []).map((id) => id.toLowerCase())
+        setPathNodeIds(ids)
+        setHighlightNodeIds(ids)
+        setSelectedNodeId(null)
+        setSelectedResource(null)
+      } catch (e: unknown) {
+        setDataPathError(e instanceof Error ? e.message : 'Data path trace failed.')
+      } finally {
+        setDataPathLoading(false)
+      }
+    },
+    [selectedSubIds],
+  )
+
   const onConnect = useCallback(
     (params: Connection) => setEdges((eds) => addEdge(params, eds)),
     [setEdges],
@@ -242,6 +299,40 @@ export default function DiscoveryView() {
   }, [selectedSubIds, subscriptions])
 
   const renderedEdges = useMemo(() => {
+    // Highest priority: a traced data path. Highlight the edges that connect
+    // consecutive nodes in the returned path and dim everything else.
+    if (pathNodeIds.length > 1) {
+      const pathSet = new Set(pathNodeIds)
+      const adjacentPairs = new Set<string>()
+      for (let i = 0; i < pathNodeIds.length - 1; i++) {
+        adjacentPairs.add(`${pathNodeIds[i]}__${pathNodeIds[i + 1]}`)
+        adjacentPairs.add(`${pathNodeIds[i + 1]}__${pathNodeIds[i]}`)
+      }
+      const onPath = (e: Edge) =>
+        adjacentPairs.has(`${e.source}__${e.target}`) ||
+        (pathSet.has(e.source) && pathSet.has(e.target))
+
+      return edges.map((e) => {
+        const highlight = onPath(e)
+        const style = e.style ?? {}
+        const labelStyle = e.labelStyle ?? {}
+        return {
+          ...e,
+          animated: highlight ? true : false,
+          style: {
+            ...style,
+            stroke: highlight ? '#7c3aed' : style.stroke,
+            opacity: highlight ? 1 : 0.1,
+            strokeWidth: highlight ? 3.5 : Number(style.strokeWidth ?? 1.5),
+          },
+          labelStyle: { ...labelStyle, opacity: highlight ? 1 : 0.2 },
+          markerEnd: highlight
+            ? { type: MarkerType.ArrowClosed, color: '#7c3aed' }
+            : e.markerEnd,
+        }
+      })
+    }
+
     if (!selectedNodeId || selectedResource?.type.toLowerCase() !== 'microsoft.compute/virtualmachines') {
       return edges
     }
@@ -294,7 +385,7 @@ export default function DiscoveryView() {
         },
       }
     })
-  }, [edges, selectedNodeId, selectedResource])
+  }, [edges, selectedNodeId, selectedResource, pathNodeIds])
 
   // When a routing finding is focused, dim every node except the affected ones
   // and outline the affected nodes so the user can locate them on the canvas.
@@ -434,6 +525,21 @@ export default function DiscoveryView() {
           >
             {routingLoading ? 'Analyzing…' : 'Analyze routing'}
           </button>
+          <button
+            onClick={() => setDataPathOpen((v) => !v)}
+            disabled={nodes.length === 0}
+            title="Trace the network data path from a source VM to a destination IP or resource and highlight it on the map."
+            className="bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
+          >
+            Trace data path
+          </button>
+          <button
+            onClick={() => setVersionOpen((v) => !v)}
+            title="Save the current discovery as a version and compare how your environment changed between discoveries."
+            className="bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
+          >
+            Version history
+          </button>
         </div>
         {error && (
           <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">
@@ -489,6 +595,29 @@ export default function DiscoveryView() {
             setRoutingOpen(false)
             setHighlightNodeIds([])
           }}
+        />
+      )}
+      {dataPathOpen && (
+        <DataPathPanel
+          vms={vmOptions}
+          result={dataPathResult}
+          loading={dataPathLoading}
+          error={dataPathError}
+          onTrace={tracePath}
+          onClose={() => {
+            setDataPathOpen(false)
+            setDataPathResult(null)
+            setDataPathError(null)
+            setPathNodeIds([])
+            setHighlightNodeIds([])
+          }}
+        />
+      )}
+      {versionOpen && (
+        <VersionHistoryPanel
+          subscriptionIds={selectedSubIds}
+          hasTopology={nodes.length > 0}
+          onClose={() => setVersionOpen(false)}
         />
       )}
       {replicateOpen && (
