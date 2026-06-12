@@ -26,6 +26,10 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddScoped<ResourceGraphService>();
 builder.Services.AddScoped<IDiscoveryService, DiscoveryService>();
 builder.Services.AddScoped<ITopologyService, TopologyService>();
+// DataPathService depends on these concrete evaluators — they must be registered too.
+builder.Services.AddScoped<EasyAzure.DataPath.Services.NsgEvaluator>();
+builder.Services.AddScoped<EasyAzure.DataPath.Services.RouteEvaluator>();
+builder.Services.AddScoped<EasyAzure.DataPath.Services.PeeringEvaluator>();
 builder.Services.AddScoped<IDataPathService, DataPathService>();
 builder.Services.AddScoped<IDesignerService, DesignerService>();
 builder.Services.AddScoped<IBestPracticeEngine, BestPracticeEngine>();

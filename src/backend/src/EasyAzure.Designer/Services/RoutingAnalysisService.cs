@@ -91,6 +91,50 @@ public class RoutingAnalysisService : IRoutingAnalysisService
             }
         }
 
+        // Robust fallback: inspect route tables directly from node data. The synthesised
+        // default-route edges depend on ARM enrichment + firewall-IP matching succeeding;
+        // reading the route table resources guarantees we still see forced-tunnel routes
+        // (0.0.0.0/0 → VirtualAppliance/IP) even when edge synthesis was incomplete.
+        var subnetToRouteTable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in subnets)
+        {
+            var rtId = GetSubnetRouteTableId(s.Data);
+            if (!string.IsNullOrWhiteSpace(rtId)) subnetToRouteTable[s.Id] = rtId!;
+        }
+
+        var routeTableToSubnets = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (subnetId, rtId) in subnetToRouteTable)
+        {
+            (routeTableToSubnets.TryGetValue(rtId, out var l) ? l : routeTableToSubnets[rtId] = []).Add(subnetId);
+        }
+        foreach (var rtNode in nodes.Where(n => TypeIs(n, RouteTableType)))
+        {
+            foreach (var subnetId in GetRouteTableSubnetRefs(rtNode.Data))
+            {
+                if (!subnetToRouteTable.ContainsKey(subnetId)) subnetToRouteTable[subnetId] = rtNode.Id;
+                var list = routeTableToSubnets.TryGetValue(rtNode.Id, out var l) ? l : routeTableToSubnets[rtNode.Id] = [];
+                if (!list.Contains(subnetId, StringComparer.OrdinalIgnoreCase)) list.Add(subnetId);
+            }
+        }
+
+        foreach (var rtNode in nodes.Where(n => TypeIs(n, RouteTableType)))
+        {
+            var associated = routeTableToSubnets.GetValueOrDefault(rtNode.Id, []);
+            if (associated.Count == 0) continue;
+            foreach (var (prefix, nextHopType, nextHopIp, _) in ParseRoutes(rtNode.Data))
+            {
+                if (!string.Equals(prefix, "0.0.0.0/0", StringComparison.Ordinal)) continue;
+                var forces = string.Equals(nextHopType, "VirtualAppliance", StringComparison.OrdinalIgnoreCase)
+                    || !string.IsNullOrWhiteSpace(nextHopIp);
+                if (!forces) continue;
+                foreach (var subnetId in associated)
+                {
+                    forcedTunnelSubnets.Add(subnetId);
+                    if (!string.IsNullOrWhiteSpace(nextHopIp)) subnetNextHopIp[subnetId] = nextHopIp;
+                }
+            }
+        }
+
         // Per-VNet forced-tunnel posture.
         var vnetForcesTunnel = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         var vnetForcedSubnets = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
@@ -217,6 +261,31 @@ public class RoutingAnalysisService : IRoutingAnalysisService
                     "Standardise the egress posture across subnets that communicate with each other, or add explicit " +
                     "UDRs so both directions of inter-subnet flows traverse the same appliance.",
                 Reference = LearnUdr,
+                Source = "rule",
+            });
+        }
+
+        // ── RULE RT-LOOP-001: Default route on AzureFirewallSubnet (routing loop) ──
+        // The firewall's own subnet (AzureFirewallSubnet) must not carry a 0.0.0.0/0 UDR that
+        // sends traffic to a virtual appliance/firewall — it forces the firewall to route its
+        // own egress back through itself, creating a loop and breaking outbound connectivity.
+        foreach (var subnetId in forcedTunnelSubnets)
+        {
+            if (!subnetId.EndsWith("/subnets/AzureFirewallSubnet", StringComparison.OrdinalIgnoreCase)) continue;
+            findings.Add(new RoutingFinding
+            {
+                Severity = "error",
+                RuleId = "RT-LOOP-001",
+                Title = "Routing loop on AzureFirewallSubnet",
+                Message =
+                    $"The AzureFirewallSubnet in \"{NameOf(VNetOf(subnetId) ?? subnetId)}\" has a user-defined route " +
+                    "for 0.0.0.0/0 pointing at a virtual appliance. The Azure Firewall's own subnet must not force its " +
+                    "egress through an appliance — this creates a routing loop and breaks the firewall's outbound traffic.",
+                AffectedNodeIds = [subnetId],
+                Recommendation =
+                    "Remove the 0.0.0.0/0 user-defined route from the route table associated with AzureFirewallSubnet. " +
+                    "The firewall manages its own egress; only spoke/workload subnets should route 0.0.0.0/0 to the firewall.",
+                Reference = LearnForcedTunnel,
                 Source = "rule",
             });
         }
@@ -383,8 +452,10 @@ public class RoutingAnalysisService : IRoutingAnalysisService
 
     // ───────── Helpers ─────────
 
+    // FlowNode.Type is always the ReactFlow node kind ("azureResource"); the real Azure
+    // resource type lives in node.Data.Type. Comparisons must use Data.Type.
     private static bool TypeIs(FlowNode? node, string lowerType) =>
-        node is not null && string.Equals(node.Type, lowerType, StringComparison.OrdinalIgnoreCase);
+        node?.Data is not null && string.Equals(node.Data.Type, lowerType, StringComparison.OrdinalIgnoreCase);
 
     private static string ShortName(string id)
     {
@@ -405,6 +476,49 @@ public class RoutingAnalysisService : IRoutingAnalysisService
         }
     }
 
+    /// <summary>Reads the route table resource ID associated with a subnet (flat or nested form).</summary>
+    private static string? GetSubnetRouteTableId(AzureResource? subnet)
+    {
+        if (subnet?.Properties is null) return null;
+        if (subnet.Properties.TryGetValue("routeTableId", out var flat) && flat is string fs && !string.IsNullOrWhiteSpace(fs))
+            return fs;
+        if (subnet.Properties.TryGetValue("routeTable", out var rt) && rt is IDictionary<string, object> rtObj
+            && rtObj.TryGetValue("id", out var idVal) && idVal is string id && !string.IsNullOrWhiteSpace(id))
+            return id;
+        return null;
+    }
+
+    /// <summary>Reads the subnet resource IDs that a route table reports as associated.</summary>
+    private static IEnumerable<string> GetRouteTableSubnetRefs(AzureResource? routeTable)
+    {
+        if (routeTable?.Properties is null) yield break;
+        if (!routeTable.Properties.TryGetValue("subnets", out var raw) || raw is not IEnumerable<object> list) yield break;
+        foreach (var item in list)
+        {
+            if (item is IDictionary<string, object> obj && obj.TryGetValue("id", out var idVal)
+                && idVal is string id && !string.IsNullOrWhiteSpace(id))
+                yield return id;
+        }
+    }
+
+    /// <summary>Parses the routes of a route table resource into (prefix, nextHopType, nextHopIp, name) tuples.</summary>
+    private static IEnumerable<(string Prefix, string NextHopType, string NextHopIp, string Name)> ParseRoutes(AzureResource? routeTable)
+    {
+        if (routeTable?.Properties is null) yield break;
+        if (!routeTable.Properties.TryGetValue("routes", out var raw) || raw is not IEnumerable<object> list) yield break;
+        foreach (var item in list)
+        {
+            if (item is not IDictionary<string, object> route) continue;
+            var name = route.TryGetValue("name", out var n) ? n?.ToString() ?? string.Empty : string.Empty;
+            if (!route.TryGetValue("properties", out var p) || p is not IDictionary<string, object> props) continue;
+            var prefix = props.TryGetValue("addressPrefix", out var pre) ? pre?.ToString() ?? string.Empty : string.Empty;
+            var nextHopType = props.TryGetValue("nextHopType", out var t) ? t?.ToString() ?? string.Empty : string.Empty;
+            var nextHopIp = props.TryGetValue("nextHopIpAddress", out var ip) ? ip?.ToString() ?? string.Empty : string.Empty;
+            if (string.IsNullOrWhiteSpace(prefix)) continue;
+            yield return (prefix, nextHopType, nextHopIp, name);
+        }
+    }
+
     /// <summary>Compact, AI-friendly summary of the routing-relevant parts of the topology.</summary>
     private static object SummarizeTopology(TopologyGraph graph)
     {
@@ -412,11 +526,11 @@ public class RoutingAnalysisService : IRoutingAnalysisService
         var edges = graph.Edges ?? [];
         return new
         {
-            vnets = nodes.Where(n => string.Equals(n.Type, VNetType, StringComparison.OrdinalIgnoreCase))
+            vnets = nodes.Where(n => string.Equals(n.Data?.Type, VNetType, StringComparison.OrdinalIgnoreCase))
                 .Select(n => new { id = n.Id, name = n.Data?.Name }),
-            subnets = nodes.Where(n => string.Equals(n.Type, SubnetType, StringComparison.OrdinalIgnoreCase))
+            subnets = nodes.Where(n => string.Equals(n.Data?.Type, SubnetType, StringComparison.OrdinalIgnoreCase))
                 .Select(n => new { id = n.Id, name = n.Data?.Name }),
-            firewalls = nodes.Where(n => string.Equals(n.Type, FirewallType, StringComparison.OrdinalIgnoreCase))
+            firewalls = nodes.Where(n => string.Equals(n.Data?.Type, FirewallType, StringComparison.OrdinalIgnoreCase))
                 .Select(n => new { id = n.Id, name = n.Data?.Name }),
             peerings = edges.Where(e => string.Equals(e.Category, FlowEdgeCategory.Peering, StringComparison.OrdinalIgnoreCase))
                 .Select(e => new { e.Source, e.Target, e.Label }),
