@@ -1,6 +1,7 @@
 name: Backend CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, develop]
     paths:
@@ -11,6 +12,10 @@ on:
     paths:
       - 'src/backend/**'
       - 'src/workers/**'
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   build-and-test:
@@ -120,7 +125,7 @@ jobs:
   deploy-staging:
     needs: [docker-build-api, docker-build-workers]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
     environment: staging
 
     steps:
@@ -139,3 +144,14 @@ jobs:
             --name ca-easyazure-staging-api \
             --resource-group ${{ secrets.AZURE_RG_STAGING }} \
             --image ${{ secrets.ACR_NAME }}.azurecr.io/easyazure-api:${{ github.sha }}
+
+      - name: Verify API deployment
+        run: |
+          FQDN=$(az containerapp show \
+            --name ca-easyazure-staging-api \
+            --resource-group ${{ secrets.AZURE_RG_STAGING }} \
+            --query properties.configuration.ingress.fqdn \
+            --output tsv)
+          curl --fail --silent --show-error \
+            --retry 12 --retry-delay 10 --retry-all-errors \
+            "https://${FQDN}/health"

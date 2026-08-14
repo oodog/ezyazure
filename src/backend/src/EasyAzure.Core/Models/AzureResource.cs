@@ -44,7 +44,25 @@ public enum ResourceRelationship
 
 public record TopologyGraph(
     IReadOnlyList<FlowNode> Nodes,
-    IReadOnlyList<FlowEdge> Edges);
+    IReadOnlyList<FlowEdge> Edges,
+    DiscoveryCoverage? Coverage = null);
+
+public record DiscoveryCoverage
+{
+    public required IReadOnlyList<string> RequestedSubscriptionIds { get; init; }
+    public required IReadOnlyList<string> SuccessfulSubscriptionIds { get; init; }
+    public IReadOnlyList<DiscoveryCoverageFailure> Failures { get; init; } = [];
+    public bool IsComplete => Failures.Count == 0
+        && SuccessfulSubscriptionIds.Count == RequestedSubscriptionIds.Count;
+}
+
+public record DiscoveryCoverageFailure
+{
+    public required string SubscriptionId { get; init; }
+    public required string Stage { get; init; }
+    public required string FailureType { get; init; }
+    public required string Message { get; init; }
+}
 
 public record FlowNode(
     string Id,

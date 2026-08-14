@@ -1,5 +1,27 @@
 # Getting started — local development
 
+## CI/CD deployment prerequisites
+
+The application workflows deploy the `main` and `develop` branches to the staging resources. Before running them, configure the GitHub `staging` environment and these Actions secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `AZURE_CLIENT_ID` | Client ID of the Entra application trusted by GitHub OIDC |
+| `AZURE_TENANT_ID` | Entra tenant containing the deployment application |
+| `AZURE_SUBSCRIPTION_ID` | Subscription containing the staging resources |
+| `ACR_NAME` | Azure Container Registry name without `.azurecr.io` |
+| `AZURE_RG_STAGING` | Staging resource group name |
+| `SWA_STAGING_TOKEN` | Deployment token for `swa-easyazure-staging` |
+
+The Entra application requires federated credentials for both branch subjects:
+
+- `repo:oodog/ezyazure:ref:refs/heads/main`
+- `repo:oodog/ezyazure:ref:refs/heads/develop`
+
+Grant the deployment service principal `Contributor` on `rg-easyazure-staging`. Avoid subscription-wide `Owner` access. The workflows request `id-token: write` only so `azure/login` can exchange the GitHub OIDC token; no client secret is required.
+
+After changing credentials or deployment settings, run **Backend CI** and **Frontend CI** manually from GitHub Actions. Both workflows validate the deployed public endpoint before reporting success.
+
 ## Prerequisites
 
 - [.NET 8 SDK](https://dotnet.microsoft.com/download)

@@ -30,6 +30,21 @@ export interface ResourceEdge {
 export interface TopologyGraph {
   nodes: FlowNode[]
   edges: FlowEdge[]
+  coverage?: DiscoveryCoverage
+}
+
+export interface DiscoveryCoverage {
+  requestedSubscriptionIds: string[]
+  successfulSubscriptionIds: string[]
+  failures: DiscoveryCoverageFailure[]
+  isComplete: boolean
+}
+
+export interface DiscoveryCoverageFailure {
+  subscriptionId: string
+  stage: string
+  failureType: string
+  message: string
 }
 
 export interface FlowNode {

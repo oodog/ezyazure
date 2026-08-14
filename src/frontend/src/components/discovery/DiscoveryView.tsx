@@ -22,7 +22,7 @@ import RoutingFindingsPanel from './RoutingFindingsPanel'
 import DataPathPanel from './DataPathPanel'
 import VersionHistoryPanel from './VersionHistoryPanel'
 import { useManualSubscriptions, isValidSubscriptionId } from '@/hooks/useManualSubscriptions'
-import type { AzureResource, FlowEdge as ApiFlowEdge, FlowNode as ApiFlowNode } from '@/types/azure'
+import type { AzureResource, DiscoveryCoverage, FlowEdge as ApiFlowEdge, FlowNode as ApiFlowNode } from '@/types/azure'
 import { applyDagreLayout } from '@/utils/dagreLayout'
 import { loadDiscoveryCache, saveDiscoveryCache } from '@/utils/discoveryCache'
 
@@ -105,6 +105,7 @@ export default function DiscoveryView() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [replicateOpen, setReplicateOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [discoveryCoverage, setDiscoveryCoverage] = useState<DiscoveryCoverage | null>(null)
 
   // Routing analysis (asymmetric routing detection + optional AI remediation)
   const [routingReport, setRoutingReport] = useState<RoutingAnalysisReport | null>(null)
@@ -189,6 +190,7 @@ export default function DiscoveryView() {
     if (selectedSubIds.length === 0) return
     setLoading(true)
     setError(null)
+    setDiscoveryCoverage(null)
     try {
       const topology =
         selectedSubIds.length === 1
@@ -196,6 +198,7 @@ export default function DiscoveryView() {
           : await discoveryService.getTopologyMulti(selectedSubIds)
       const rfNodes = topology.nodes.map(toReactFlowNode)
       const rfEdges = topology.edges.map(toReactFlowEdge)
+      setDiscoveryCoverage(topology.coverage ?? null)
       const laidOut = applyDagreLayout(rfNodes, rfEdges)
       setNodes(laidOut)
       setEdges(rfEdges)
@@ -544,6 +547,22 @@ export default function DiscoveryView() {
         {error && (
           <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">
             {error}
+          </div>
+        )}
+        {discoveryCoverage && !discoveryCoverage.isComplete && (
+          <div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 text-amber-900 text-sm rounded-lg">
+            <p className="font-semibold">Discovery is partial</p>
+            <p className="text-xs mt-0.5">
+              {discoveryCoverage.successfulSubscriptionIds.length} of {discoveryCoverage.requestedSubscriptionIds.length} subscriptions completed.
+              {' '}Missing resources can make topology and routing findings incomplete.
+            </p>
+            <ul className="text-xs mt-1 list-disc pl-4">
+              {discoveryCoverage.failures.map((failure) => (
+                <li key={`${failure.subscriptionId}-${failure.stage}`}>
+                  <span className="font-mono">{failure.subscriptionId}</span>: {failure.message}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         <div className="flex-1 bg-white border border-gray-200 rounded-xl overflow-hidden">

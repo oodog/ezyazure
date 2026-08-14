@@ -89,6 +89,12 @@ app.UseHttpsRedirection();
 app.UseCors("Frontend");
 app.UseAuthentication();
 app.UseAuthorization();
+app.MapGet("/health", () => Results.Ok(new
+{
+    status = "healthy",
+    service = "easyazure-api",
+    timestamp = DateTimeOffset.UtcNow,
+})).AllowAnonymous();
 app.MapControllers();
 
 app.Run();

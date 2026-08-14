@@ -38,14 +38,34 @@ public class TopologyService : ITopologyService
             subscriptionIds.Count, string.Join(", ", subscriptionIds));
 
         var allResources = new List<AzureResource>();
-        var networkInterfaces = new List<AzureResource>();
+        var successfulSubscriptionIds = new List<string>();
+        var failures = new List<DiscoveryCoverageFailure>();
         foreach (var subscriptionId in subscriptionIds)
         {
-            // Each collector is wrapped so missing RBAC on a single resource type
-            // never blocks the whole topology. Errors are logged + skipped.
-            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetAllResourcesAsync(subscriptionId, ct), "Resources", subscriptionId));
-            networkInterfaces.AddRange(await SafeCollectAsync(() => _resourceGraph.GetNetworkInterfacesAsync(subscriptionId, ct), "NICs", subscriptionId));
+            try
+            {
+                allResources.AddRange(await _resourceGraph.GetAllResourcesAsync(subscriptionId, ct));
+                successfulSubscriptionIds.Add(subscriptionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Topology: collecting resources for subscription {Sub} failed; returning explicit partial coverage.",
+                    subscriptionId);
+                failures.Add(new DiscoveryCoverageFailure
+                {
+                    SubscriptionId = subscriptionId,
+                    Stage = "AzureResourceGraph",
+                    FailureType = ex.GetType().Name,
+                    Message = "Azure Resource Graph discovery failed. Verify RBAC, provider access, and throttling before retrying.",
+                });
+            }
         }
+
+        var networkInterfaces = allResources
+            .Where(resource => resource.Type.Equals("Microsoft.Network/networkInterfaces", StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
         // Subnets are nested inside VNet.properties.subnets — promote them to first-
         // class nodes so they can be referenced by NSG/route-table association edges.
@@ -65,7 +85,15 @@ public class TopologyService : ITopologyService
         var nodes = BuildNodes(allResources);
         var edges = BuildEdges(allResources, networkInterfaces);
 
-        return new TopologyGraph(nodes, edges);
+        return new TopologyGraph(
+            nodes,
+            edges,
+            new DiscoveryCoverage
+            {
+                RequestedSubscriptionIds = subscriptionIds,
+                SuccessfulSubscriptionIds = successfulSubscriptionIds,
+                Failures = failures,
+            });
     }
 
     public async Task<IReadOnlyList<ResourceEdge>> GetEdgesAsync(string resourceId, CancellationToken ct = default)
@@ -74,23 +102,6 @@ public class TopologyService : ITopologyService
         // Placeholder returns empty for now.
         await Task.CompletedTask;
         return [];
-    }
-
-    private async Task<IReadOnlyList<AzureResource>> SafeCollectAsync(
-        Func<Task<IReadOnlyList<AzureResource>>> collector, string kind, string subscriptionId)
-    {
-        try
-        {
-            return await collector();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Topology: collecting {Kind} for subscription {Sub} failed; continuing without them.",
-                kind, subscriptionId);
-            return [];
-        }
     }
 
     private async Task EnrichSubnetsFromArmAsync(List<AzureResource> resources, CancellationToken ct)

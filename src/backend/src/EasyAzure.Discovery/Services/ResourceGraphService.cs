@@ -55,7 +55,7 @@ public class ResourceGraphService
         return results;
     }
 
-    public Task<IReadOnlyList<AzureResource>> GetAllResourcesAsync(
+    public virtual Task<IReadOnlyList<AzureResource>> GetAllResourcesAsync(
         string subscriptionId, CancellationToken ct = default) =>
         QueryAsync(
             "Resources | project id, name, type, location, resourceGroup, subscriptionId, properties, tags | order by id asc",
