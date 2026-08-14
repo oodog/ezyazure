@@ -1,10 +1,6 @@
 name: Infrastructure Deploy
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'infra/**'
   workflow_dispatch:
     inputs:
       environment:
@@ -14,7 +10,10 @@ on:
         type: choice
         options:
           - staging
-          - production
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   validate:
@@ -71,3 +70,14 @@ jobs:
             --template-file infra/main.bicep \
             --parameters infra/main.bicepparam \
             --parameters environmentName=${{ github.event.inputs.environment || 'staging' }}
+
+      - name: Verify API health
+        run: |
+          FQDN=$(az containerapp show \
+            --name ca-easyazure-staging-api \
+            --resource-group rg-easyazure-staging \
+            --query properties.configuration.ingress.fqdn \
+            --output tsv)
+          curl --fail --silent --show-error \
+            --retry 12 --retry-delay 10 --retry-all-errors \
+            "https://${FQDN}/health"

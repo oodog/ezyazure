@@ -13,6 +13,12 @@ param location string = 'australiaeast'
 @description('Microsoft Entra tenant ID.')
 param tenantId string
 
+@description('Microsoft Entra application client ID used by the EasyAzure SPA and API.')
+param apiClientId string
+
+@description('Fully qualified EasyAzure API container image, including an immutable tag or approved channel tag.')
+param apiContainerImage string
+
 @description('Object ID of the admin user or group for initial Key Vault access policy.')
 param adminObjectId string
 
@@ -125,7 +131,7 @@ module apiApp 'modules/container-apps.bicep' = {
     name: 'ca-${prefix}-api'
     location: location
     containerAppsEnvironmentId: containerAppsEnv.outputs.id
-    containerImage: 'mcr.microsoft.com/dotnet/aspnet:8.0'
+    containerImage: apiContainerImage
     containerRegistryServer: containerRegistry.outputs.loginServer
     managedIdentityId: apiIdentity.outputs.id
     managedIdentityPrincipalId: apiIdentity.outputs.principalId
@@ -139,6 +145,10 @@ module apiApp 'modules/container-apps.bicep' = {
       { name: 'ASPNETCORE_ENVIRONMENT', value: environmentName == 'production' ? 'Production' : 'Staging' }
       { name: 'ApplicationInsights__ConnectionString', secretRef: 'appinsights-connection-string' }
       { name: 'KeyVaultUri', value: keyVault.outputs.uri }
+      { name: 'AzureAd__TenantId', value: tenantId }
+      { name: 'AzureAd__ClientId', value: apiClientId }
+      { name: 'AzureAd__Audience', value: 'api://${apiClientId}' }
+      { name: 'AllowedOrigins__0', value: 'https://${staticWebApp.outputs.defaultHostname}' }
     ]
     tags: tags
   }

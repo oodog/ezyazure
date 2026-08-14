@@ -54,7 +54,7 @@ TENANT_ID=$(az account show --query tenantId -o tsv)
 # Add roles: Reader, Designer, Reviewer, Operator, Admin
 
 # Expose an API scope
-# (Azure Portal: App registrations → EasyAzure → Expose an API → Add scope: user_impersonation)
+# (Azure Portal: App registrations → EasyAzure → Expose an API → Add scope: access_as_user)
 ```
 
 ## 3. Configure backend
@@ -126,7 +126,8 @@ dotnet test EasyAzure.sln --logger "console;verbosity=normal"
 cd infra
 az login
 
-# Edit main.bicepparam with your tenant ID and admin object ID
+# Edit main.bicepparam with your tenant ID, API client ID, approved API image,
+# and admin object ID. The API image must exist before deployment.
 
 az deployment sub create \
   --name easyazure-infra \
@@ -134,6 +135,9 @@ az deployment sub create \
   --template-file main.bicep \
   --parameters main.bicepparam
 ```
+
+Infrastructure deployment is intentionally manual. In GitHub Actions, run
+**Infrastructure Deploy** after reviewing its subscription-level what-if output.
 
 ## Lint Bicep
 
