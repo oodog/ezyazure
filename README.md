@@ -15,6 +15,9 @@ An Azure drag-and-drop environment builder, discovery engine, data-path visualiz
 
 ## Architecture
 
+Discovery completeness and routing-confidence requirements are defined in
+[Discovery and routing coverage](docs/discovery-routing-coverage.md).
+
 ```
 Azure Front Door (optional WAF)
         │

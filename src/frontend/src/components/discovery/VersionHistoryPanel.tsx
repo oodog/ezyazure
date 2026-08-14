@@ -56,7 +56,6 @@ export default function VersionHistoryPanel({
 
   useEffect(() => {
     refresh()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const save = async () => {

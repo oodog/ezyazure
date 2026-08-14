@@ -23,9 +23,13 @@ public record RoutingAnalysisRequest
 public record RoutingFinding
 {
     public required string Severity { get; init; } // error | warning | info
+    public string Confidence { get; init; } = "potential"; // confirmed | potential | unknown
     public required string RuleId { get; init; }
     public required string Title { get; init; }
     public required string Message { get; init; }
+
+    /// <summary>Observed configuration facts and verification gaps supporting this finding.</summary>
+    public IReadOnlyList<string> Evidence { get; init; } = [];
 
     /// <summary>Topology node IDs this finding relates to (subnets, VNets, firewalls, route tables).</summary>
     public IReadOnlyList<string> AffectedNodeIds { get; init; } = [];
@@ -46,6 +50,8 @@ public record RoutingFinding
 public record RoutingAnalysisReport
 {
     public IReadOnlyList<RoutingFinding> Findings { get; init; } = [];
+    public bool EffectiveRoutesEvaluated { get; init; }
+    public IReadOnlyList<string> Limitations { get; init; } = [];
     public bool AiUsed { get; init; }
     public string? AiModel { get; init; }
     public int SubnetsAnalyzed { get; init; }

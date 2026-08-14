@@ -44,9 +44,11 @@ export interface ReplicationPlan {
 
 export interface RoutingFinding {
   severity: string
+  confidence: 'confirmed' | 'potential' | 'unknown'
   ruleId: string
   title: string
   message: string
+  evidence: string[]
   affectedNodeIds: string[]
   recommendation?: string
   aiRecommendation?: string
@@ -56,6 +58,8 @@ export interface RoutingFinding {
 
 export interface RoutingAnalysisReport {
   findings: RoutingFinding[]
+  effectiveRoutesEvaluated: boolean
+  limitations: string[]
   aiUsed: boolean
   aiModel?: string
   subnetsAnalyzed: number

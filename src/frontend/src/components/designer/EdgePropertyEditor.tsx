@@ -23,7 +23,7 @@ export default function EdgePropertyEditor({
   // Sync when a different edge is selected
   useEffect(() => {
     setProps(((edge.data as { properties?: Record<string, unknown> } | undefined)?.properties) ?? {})
-  }, [edge.id])
+  }, [edge.id, edge.data])
 
   // Apply schema defaults on first selection
   useEffect(() => {

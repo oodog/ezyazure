@@ -61,6 +61,7 @@ public static class FlowEdgeCategory
 {
     public const string Contains = "contains";
     public const string AssociatedWith = "associatedWith";
+    public const string ConnectedTo = "connectedTo";
     public const string Peering = "peering";
     public const string Route = "route";
     /// <summary>Default route (0.0.0.0/0) — always rendered red because it controls

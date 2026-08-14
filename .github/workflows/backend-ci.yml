@@ -24,18 +24,31 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Restore dependencies
-        run: dotnet restore src/backend/EasyAzure.sln
+      - name: Build API
+        run: dotnet build src/backend/src/EasyAzure.Api/EasyAzure.Api.csproj --configuration Release
 
-      - name: Build
-        run: dotnet build src/backend/EasyAzure.sln --no-restore --configuration Release
+      - name: Build discovery worker
+        run: dotnet build src/workers/EasyAzure.DiscoveryWorker/EasyAzure.DiscoveryWorker.csproj --configuration Release
 
-      - name: Run tests
+      - name: Run core tests
         run: >
-          dotnet test src/backend/EasyAzure.sln
-          --no-build
+          dotnet test src/backend/tests/EasyAzure.Tests/EasyAzure.Tests.csproj
           --configuration Release
-          --logger "trx;LogFileName=results.trx"
+          --logger "trx;LogFileName=core-results.trx"
+          --collect "XPlat Code Coverage"
+
+      - name: Run discovery tests
+        run: >
+          dotnet test src/backend/tests/EasyAzure.Discovery.Tests/EasyAzure.Discovery.Tests.csproj
+          --configuration Release
+          --logger "trx;LogFileName=discovery-results.trx"
+          --collect "XPlat Code Coverage"
+
+      - name: Run data-path tests
+        run: >
+          dotnet test src/backend/tests/EasyAzure.DataPath.Tests/EasyAzure.DataPath.Tests.csproj
+          --configuration Release
+          --logger "trx;LogFileName=data-path-results.trx"
           --collect "XPlat Code Coverage"
 
       - name: Upload test results
@@ -123,6 +136,6 @@ jobs:
       - name: Update Container App revision (staging)
         run: |
           az containerapp update \
-            --name easyazure-api-staging \
+            --name ca-easyazure-staging-api \
             --resource-group ${{ secrets.AZURE_RG_STAGING }} \
             --image ${{ secrets.ACR_NAME }}.azurecr.io/easyazure-api:${{ github.sha }}

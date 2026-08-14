@@ -20,6 +20,17 @@ function severityStyle(severity: string) {
   }
 }
 
+function confidenceStyle(confidence: RoutingFinding['confidence']) {
+  switch (confidence) {
+    case 'confirmed':
+      return 'bg-red-50 text-red-700 border-red-200'
+    case 'potential':
+      return 'bg-amber-50 text-amber-800 border-amber-200'
+    default:
+      return 'bg-gray-50 text-gray-600 border-gray-200'
+  }
+}
+
 function FindingCard({
   finding,
   highlighted,
@@ -43,6 +54,9 @@ function FindingCard({
             <span className={`text-[10px] uppercase tracking-wide font-semibold border rounded px-1.5 py-0.5 ${s.badge}`}>
               {finding.severity}
             </span>
+            <span className={`text-[10px] uppercase tracking-wide font-semibold border rounded px-1.5 py-0.5 ${confidenceStyle(finding.confidence)}`}>
+              {finding.confidence}
+            </span>
             <span className="text-[10px] font-mono text-gray-400">{finding.ruleId}</span>
           </div>
           <p className="text-sm font-semibold text-gray-900 mt-1">{finding.title}</p>
@@ -50,6 +64,15 @@ function FindingCard({
       </div>
 
       <p className="text-xs text-gray-600 leading-relaxed">{finding.message}</p>
+
+      {finding.evidence.length > 0 && (
+        <div className="text-xs text-gray-600">
+          <p className="font-semibold text-gray-800 mb-1">Evidence</p>
+          <ul className="list-disc pl-4 space-y-0.5">
+            {finding.evidence.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </div>
+      )}
 
       {finding.recommendation && (
         <div className="text-xs text-gray-700 bg-gray-50 border border-gray-100 rounded p-2">
@@ -127,6 +150,11 @@ export default function RoutingFindingsPanel({
       </div>
 
       <div className="px-4 py-3 border-b border-gray-100">
+        {!report.effectiveRoutesEvaluated && report.limitations.length > 0 && (
+          <div className="mb-3 border-l-2 border-amber-400 pl-2 text-[11px] text-gray-600">
+            Configuration analysis only. Effective routes and BGP paths were not verified.
+          </div>
+        )}
         <button
           type="button"
           onClick={onAskAi}
@@ -147,7 +175,7 @@ export default function RoutingFindingsPanel({
           <div className="text-center py-8">
             <p className="text-sm font-semibold text-emerald-700">No routing issues detected</p>
             <p className="text-xs text-gray-500 mt-1">
-              No asymmetric routing or forced-tunnel mismatches were found across the discovered peerings.
+              No asymmetric-routing risks were found in the discovered ARM configuration. Effective route verification is still required.
             </p>
           </div>
         ) : (

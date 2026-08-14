@@ -252,13 +252,20 @@ public class RoutingAnalysisService : IRoutingAnalysisService
             findings.Add(new RoutingFinding
             {
                 Severity = "warning",
+                Confidence = "potential",
                 RuleId = "RT-ASYM-001",
                 Title = "Asymmetric routing risk across VNet peering",
                 Message =
                     $"VNet \"{NameOf(forcedVnet)}\" forces traffic through a network virtual appliance " +
                     $"(0.0.0.0/0 → appliance), but its peer \"{NameOf(directVnet)}\" routes directly. " +
-                    "Traffic between these VNets can take the firewall on the forward path and bypass it on the " +
-                    "return path, so the firewall sees only one direction of the flow and drops it.",
+                    "Traffic between these VNets can traverse the appliance in one direction and bypass it on the " +
+                    "return path. Effective routes must be checked to confirm the selected path.",
+                Evidence =
+                [
+                    $"{NameOf(forcedVnet)} has a discovered 0.0.0.0/0 route to a virtual appliance.",
+                    $"No equivalent forced-tunnel route was discovered for {NameOf(directVnet)}.",
+                    "NIC effective routes and Network Watcher next-hop results were not evaluated.",
+                ],
                 AffectedNodeIds = affected.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
                 Recommendation =
                     $"Apply a matching user-defined route on the subnets in \"{NameOf(directVnet)}\" so that return " +
@@ -278,12 +285,19 @@ public class RoutingAnalysisService : IRoutingAnalysisService
             findings.Add(new RoutingFinding
             {
                 Severity = "info",
+                Confidence = "unknown",
                 RuleId = "RT-ASYM-002",
                 Title = "Forced tunnel to an unverified appliance",
                 Message =
                     $"Subnet \"{NameOf(subnetId)}\" sends 0.0.0.0/0 to next hop {ip}, which is not a discovered " +
                     "Azure Firewall. If this appliance does not have a symmetric return route to this subnet, " +
                     "flows through it will be asymmetric.",
+                Evidence =
+                [
+                    $"A discovered 0.0.0.0/0 route uses virtual-appliance next hop {ip}.",
+                    "The next-hop IP does not match a discovered Azure Firewall private IP.",
+                    "Third-party appliance ownership and effective return routes are unknown.",
+                ],
                 AffectedNodeIds = [subnetId],
                 Recommendation =
                     $"Confirm the appliance at {ip} has a route back to this subnet's address range, and that the " +
@@ -308,12 +322,19 @@ public class RoutingAnalysisService : IRoutingAnalysisService
             findings.Add(new RoutingFinding
             {
                 Severity = "info",
+                Confidence = "potential",
                 RuleId = "RT-ASYM-003",
                 Title = "Mixed egress posture within a VNet",
                 Message =
                     $"VNet \"{NameOf(vnet)}\" has {forced.Count} subnet(s) forcing egress through an appliance and " +
                     $"{direct.Count} subnet(s) routing directly. Flows between these subnets may be asymmetric if they " +
                     "transit a stateful appliance in only one direction.",
+                Evidence =
+                [
+                    $"{forced.Count} subnet(s) have a discovered default route to a virtual appliance.",
+                    $"{direct.Count} subnet(s) have no discovered virtual-appliance default route.",
+                    "Effective route selection for individual flows was not evaluated.",
+                ],
                 AffectedNodeIds = affected.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
                 Recommendation =
                     "Standardise the egress posture across subnets that communicate with each other, or add explicit " +
@@ -348,6 +369,7 @@ public class RoutingAnalysisService : IRoutingAnalysisService
             findings.Add(new RoutingFinding
             {
                 Severity = "warning",
+                Confidence = "potential",
                 RuleId = "RT-ASYM-004",
                 Title = "One-way route steering across VNet peering",
                 Message =
@@ -355,8 +377,14 @@ public class RoutingAnalysisService : IRoutingAnalysisService
                     $"\"{NameOf(otherVnet)}\" through a network virtual appliance" +
                     (string.IsNullOrWhiteSpace(steer.Ip) ? string.Empty : $" ({steer.Ip})") +
                     $", but \"{NameOf(otherVnet)}\" has no matching route to send return traffic back through the " +
-                    "same appliance. The forward path traverses the stateful appliance and the return path bypasses " +
-                    "it, so the appliance sees only one direction of the flow and drops it.",
+                    "same appliance in the discovered UDR configuration. Effective routes must be checked to confirm " +
+                    "whether the forward and return paths actually differ.",
+                Evidence =
+                [
+                    $"A discovered UDR in {NameOf(steeringVnet)} covers {NameOf(otherVnet)} and uses a virtual appliance.",
+                    $"No matching reverse UDR was discovered in {NameOf(otherVnet)}.",
+                    "BGP propagation, system routes, and NIC effective routes were not evaluated.",
+                ],
                 AffectedNodeIds = affected.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
                 Recommendation =
                     $"Add a user-defined route on the subnets in \"{NameOf(otherVnet)}\" for \"{NameOf(steeringVnet)}\"'s " +
@@ -382,12 +410,19 @@ public class RoutingAnalysisService : IRoutingAnalysisService
             findings.Add(new RoutingFinding
             {
                 Severity = "info",
+                Confidence = "unknown",
                 RuleId = "RT-NVA-001",
                 Title = "Route next hop is not a discovered firewall",
                 Message =
                     $"One or more user-defined routes send traffic to next-hop appliance {ip}, which is not the " +
                     "private IP of any discovered Azure Firewall. If this is not an intentional third-party NVA, the " +
                     "route may blackhole traffic, and return paths cannot be verified for symmetry.",
+                Evidence =
+                [
+                    $"At least one discovered UDR uses virtual-appliance next hop {ip}.",
+                    "No discovered Azure Firewall owns this private IP.",
+                    "The inventory does not prove whether a VM, VM scale set, or managed NVA owns the IP.",
+                ],
                 AffectedNodeIds = affected,
                 Recommendation =
                     $"Confirm an appliance actually owns {ip} and that it has a symmetric return route to each " +
@@ -407,12 +442,18 @@ public class RoutingAnalysisService : IRoutingAnalysisService
             findings.Add(new RoutingFinding
             {
                 Severity = "error",
+                Confidence = "confirmed",
                 RuleId = "RT-LOOP-001",
                 Title = "Routing loop on AzureFirewallSubnet",
                 Message =
                     $"The AzureFirewallSubnet in \"{NameOf(VNetOf(subnetId) ?? subnetId)}\" has a user-defined route " +
                     "for 0.0.0.0/0 pointing at a virtual appliance. The Azure Firewall's own subnet must not force its " +
                     "egress through an appliance — this creates a routing loop and breaks the firewall's outbound traffic.",
+                Evidence =
+                [
+                    "The affected subnet is AzureFirewallSubnet.",
+                    "Its associated route table contains 0.0.0.0/0 with a virtual-appliance next hop.",
+                ],
                 AffectedNodeIds = [subnetId],
                 Recommendation =
                     "Remove the 0.0.0.0/0 user-defined route from the route table associated with AzureFirewallSubnet. " +
@@ -426,6 +467,13 @@ public class RoutingAnalysisService : IRoutingAnalysisService
         {
             Findings = findings,
             SubnetsAnalyzed = subnets.Count,
+            EffectiveRoutesEvaluated = false,
+            Limitations =
+            [
+                "Findings are based on discovered ARM configuration, not NIC effective route tables.",
+                "BGP-learned routes, Virtual WAN effective routes, and Network Watcher next-hop results were not evaluated.",
+                "A clean configuration scan does not prove that every forward and return path is symmetric.",
+            ],
             AiUsed = false,
         };
 

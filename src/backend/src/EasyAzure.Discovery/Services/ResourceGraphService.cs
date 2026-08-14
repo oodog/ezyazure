@@ -29,18 +29,37 @@ public class ResourceGraphService
         var token = await credential.GetTokenAsync(
             new Azure.Core.TokenRequestContext(["https://management.azure.com/.default"]), ct);
 
-        var client = new ResourceGraphClient(new TokenCredentials(token.Token));
+        using var client = new ResourceGraphClient(new TokenCredentials(token.Token));
+        var results = new List<AzureResource>();
+        string? skipToken = null;
 
-        var request = new QueryRequest(
-            subscriptions: subscriptions?.ToList() ?? [],
-            query: kustoQuery,
-            options: new QueryRequestOptions { ResultFormat = ResultFormat.ObjectArray },
-            facets: null);
+        do
+        {
+            var request = new QueryRequest(
+                subscriptions: subscriptions?.ToList() ?? [],
+                query: kustoQuery,
+                options: new QueryRequestOptions
+                {
+                    ResultFormat = ResultFormat.ObjectArray,
+                    Top = 1000,
+                    SkipToken = skipToken,
+                },
+                facets: null);
 
-        var response = await client.ResourcesAsync(request);
+            var response = await client.ResourcesAsync(request, ct);
+            results.AddRange(ParseQueryResult(response));
+            skipToken = response.SkipToken;
+        }
+        while (!string.IsNullOrWhiteSpace(skipToken));
 
-        return ParseQueryResult(response);
+        return results;
     }
+
+    public Task<IReadOnlyList<AzureResource>> GetAllResourcesAsync(
+        string subscriptionId, CancellationToken ct = default) =>
+        QueryAsync(
+            "Resources | project id, name, type, location, resourceGroup, subscriptionId, properties, tags | order by id asc",
+            [subscriptionId], ct);
 
     public async Task<int> CountAllResourcesAsync(CancellationToken ct = default)
     {

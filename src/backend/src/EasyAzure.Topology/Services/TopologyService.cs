@@ -43,13 +43,7 @@ public class TopologyService : ITopologyService
         {
             // Each collector is wrapped so missing RBAC on a single resource type
             // never blocks the whole topology. Errors are logged + skipped.
-            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetVNetsAsync(subscriptionId, ct), "VNets", subscriptionId));
-            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetSubnetsAsync(subscriptionId, ct), "Subnets", subscriptionId));
-            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetNSGsAsync(subscriptionId, ct), "NSGs", subscriptionId));
-            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetRouteTablesAsync(subscriptionId, ct), "RouteTables", subscriptionId));
-            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetVMsAsync(subscriptionId, ct), "VMs", subscriptionId));
-            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetPrivateEndpointsAsync(subscriptionId, ct), "PrivateEndpoints", subscriptionId));
-            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetFirewallsAsync(subscriptionId, ct), "Firewalls", subscriptionId));
+            allResources.AddRange(await SafeCollectAsync(() => _resourceGraph.GetAllResourcesAsync(subscriptionId, ct), "Resources", subscriptionId));
             networkInterfaces.AddRange(await SafeCollectAsync(() => _resourceGraph.GetNetworkInterfacesAsync(subscriptionId, ct), "NICs", subscriptionId));
         }
 
@@ -729,7 +723,7 @@ public class TopologyService : ITopologyService
         _ => 5,
     };
 
-    private static List<FlowEdge> BuildEdges(List<AzureResource> resources, List<AzureResource> networkInterfaces)
+    internal static List<FlowEdge> BuildEdges(List<AzureResource> resources, List<AzureResource> networkInterfaces)
     {
         var edges = new List<FlowEdge>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -765,12 +759,14 @@ public class TopologyService : ITopologyService
                     AddRouteTableEdges(resource, Emit);
                     break;
                 case "microsoft.network/privateendpoints":
-                    AddPrivateEndpointEdges(resource, Emit);
+                    AddPrivateEndpointEdges(resource, byId, Emit);
                     break;
                 case "microsoft.compute/virtualmachines":
                     AddVmEdges(resource, nicToSubnetIds, Emit);
                     break;
             }
+
+            AddGenericReferenceEdges(resource, byId, Emit);
         }
 
         // Synthesise subnet → default-route edges so the red "0.0.0.0/0" data path
@@ -1074,10 +1070,12 @@ public class TopologyService : ITopologyService
         }
     }
 
-    private static void AddPrivateEndpointEdges(AzureResource pe, Action<FlowEdge> emit)
+    private static void AddPrivateEndpointEdges(
+        AzureResource pe,
+        IReadOnlyDictionary<string, AzureResource> resourcesById,
+        Action<FlowEdge> emit)
     {
-        var subnet = (pe.Properties.TryGetValue("subnet", out var sObj) ? sObj : null) as JObject;
-        var subnetId = subnet?["id"]?.ToString();
+        var subnetId = TryGetReferenceId(pe.Properties, "subnet");
         if (!string.IsNullOrEmpty(subnetId))
         {
             emit(new FlowEdge(
@@ -1087,7 +1085,120 @@ public class TopologyService : ITopologyService
                 Label: "in subnet",
                 Category: FlowEdgeCategory.AssociatedWith));
         }
+
+        foreach (var connectionKey in new[] { "privateLinkServiceConnections", "manualPrivateLinkServiceConnections" })
+        {
+            if (!TryGetArrayCaseInsensitive(pe.Properties, connectionKey, out var connections)) continue;
+
+            foreach (var connection in connections.OfType<JObject>())
+            {
+                var properties = connection["properties"] as JObject;
+                var targetId = properties?["privateLinkServiceId"]?.Value<string>();
+                if (string.IsNullOrWhiteSpace(targetId) || !targetId.StartsWith("/", StringComparison.Ordinal)) continue;
+                if (!resourcesById.ContainsKey(targetId)) continue;
+
+                var groupIds = properties?["groupIds"] is JArray groups
+                    ? groups.Values<string>().Where(group => !string.IsNullOrWhiteSpace(group)).ToArray()
+                    : [];
+                var status = properties?["privateLinkServiceConnectionState"]?["status"]?.Value<string>();
+                var label = groupIds.Length == 0 ? "private link" : $"private link ({string.Join(", ", groupIds)})";
+                if (!string.IsNullOrWhiteSpace(status)) label += $" - {status}";
+
+                emit(new FlowEdge(
+                    Id: $"reference|{pe.Id}|{targetId}",
+                    Source: pe.Id,
+                    Target: targetId,
+                    Label: label,
+                    Category: FlowEdgeCategory.AssociatedWith,
+                    Metadata: new Dictionary<string, string>
+                    {
+                        ["relationship"] = "privateLinkService",
+                        ["groupIds"] = string.Join(",", groupIds),
+                        ["status"] = status ?? string.Empty,
+                    }));
+            }
+        }
     }
+
+    private static void AddGenericReferenceEdges(
+        AzureResource resource,
+        IReadOnlyDictionary<string, AzureResource> resourcesById,
+        Action<FlowEdge> emit)
+    {
+        foreach (var (targetId, path) in EnumerateArmResourceReferences(resource.Properties, "properties")
+                     .DistinctBy(reference => reference.TargetId, StringComparer.OrdinalIgnoreCase))
+        {
+            if (string.Equals(resource.Id, targetId, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!resourcesById.ContainsKey(targetId)) continue;
+
+            emit(new FlowEdge(
+                Id: $"reference|{resource.Id}|{targetId}",
+                Source: resource.Id,
+                Target: targetId,
+                Label: $"references ({path})",
+                Category: FlowEdgeCategory.ConnectedTo,
+                Metadata: new Dictionary<string, string>
+                {
+                    ["relationship"] = "armReference",
+                    ["propertyPath"] = path,
+                }));
+        }
+    }
+
+    private static IEnumerable<(string TargetId, string Path)> EnumerateArmResourceReferences(
+        object? value,
+        string path)
+    {
+        switch (value)
+        {
+            case string text when IsArmResourceId(text):
+                yield return (text.TrimEnd('/'), path);
+                yield break;
+
+            case JValue { Type: JTokenType.String } jValue when IsArmResourceId(jValue.Value<string>()):
+                yield return (jValue.Value<string>()!.TrimEnd('/'), path);
+                yield break;
+
+            case JObject jObject:
+                foreach (var property in jObject.Properties())
+                {
+                    foreach (var reference in EnumerateArmResourceReferences(property.Value, $"{path}.{property.Name}"))
+                        yield return reference;
+                }
+                yield break;
+
+            case IDictionary<string, object> dictionary:
+                foreach (var (key, item) in dictionary)
+                {
+                    foreach (var reference in EnumerateArmResourceReferences(item, $"{path}.{key}"))
+                        yield return reference;
+                }
+                yield break;
+
+            case JArray jArray:
+                for (var index = 0; index < jArray.Count; index++)
+                {
+                    foreach (var reference in EnumerateArmResourceReferences(jArray[index], $"{path}[{index}]"))
+                        yield return reference;
+                }
+                yield break;
+
+            case IEnumerable<object> items:
+                var itemIndex = 0;
+                foreach (var item in items)
+                {
+                    foreach (var reference in EnumerateArmResourceReferences(item, $"{path}[{itemIndex}]"))
+                        yield return reference;
+                    itemIndex++;
+                }
+                yield break;
+        }
+    }
+
+    private static bool IsArmResourceId(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && (value.StartsWith("/subscriptions/", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("/providers/", StringComparison.OrdinalIgnoreCase));
 
     private static void AddVmEdges(AzureResource vm, Dictionary<string, HashSet<string>> nicToSubnetIds, Action<FlowEdge> emit)
     {
