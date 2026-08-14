@@ -25,6 +25,12 @@ import { useManualSubscriptions, isValidSubscriptionId } from '@/hooks/useManual
 import type { AzureResource, DiscoveryCoverage, FlowEdge as ApiFlowEdge, FlowNode as ApiFlowNode } from '@/types/azure'
 import { applyDagreLayout } from '@/utils/dagreLayout'
 import { loadDiscoveryCache, saveDiscoveryCache } from '@/utils/discoveryCache'
+import {
+  discoveryTechnologies,
+  filterDiscoveryGraph,
+  getDiscoveryTechnology,
+  type DiscoveryTechnology,
+} from '@/utils/discoveryTechnology'
 
 const nodeTypes = { azureResource: DiscoveryResourceNode }
 const INTERNET_NODE_ID = 'easyazure://internet'
@@ -103,6 +109,10 @@ export default function DiscoveryView() {
     () => new Set(subscriptionId ? [subscriptionId] : []),
   )
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [technologyPickerOpen, setTechnologyPickerOpen] = useState(false)
+  const [selectedTechnologies, setSelectedTechnologies] = useState<Set<DiscoveryTechnology>>(
+    () => new Set(),
+  )
   const [replicateOpen, setReplicateOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [discoveryCoverage, setDiscoveryCoverage] = useState<DiscoveryCoverage | null>(null)
@@ -154,6 +164,26 @@ export default function DiscoveryView() {
   }, [apiSubs, manual.items])
 
   const selectedSubIds = useMemo(() => Array.from(selectedSubs), [selectedSubs])
+
+  const availableTechnologies = useMemo(() => {
+    const counts = new Map<DiscoveryTechnology, number>()
+    for (const node of nodes) {
+      const technology = getDiscoveryTechnology(node.data.type)
+      counts.set(technology, (counts.get(technology) ?? 0) + 1)
+    }
+    return discoveryTechnologies
+      .map((technology) => ({ ...technology, count: counts.get(technology.key) ?? 0 }))
+      .filter((technology) => technology.count > 0)
+  }, [nodes])
+
+  const toggleTechnology = (technology: DiscoveryTechnology) => {
+    setSelectedTechnologies((previous) => {
+      const next = new Set(previous)
+      if (next.has(technology)) next.delete(technology)
+      else next.add(technology)
+      return next
+    })
+  }
 
   const toggleSub = (id: string) => {
     setSelectedSubs((prev) => {
@@ -410,6 +440,16 @@ export default function DiscoveryView() {
     })
   }, [nodes, highlightNodeIds])
 
+  const filteredGraph = useMemo(
+    () => filterDiscoveryGraph(renderedNodes, renderedEdges, selectedTechnologies),
+    [renderedNodes, renderedEdges, selectedTechnologies],
+  )
+
+  const visibleNodeIds = useMemo(
+    () => new Set(filteredGraph.nodes.map((node) => node.id)),
+    [filteredGraph.nodes],
+  )
+
   return (
     <div className="flex h-full gap-4">
       <div className="flex-1 flex flex-col min-w-0">
@@ -512,6 +552,61 @@ export default function DiscoveryView() {
           >
             {loading ? 'Discovering…' : 'Discover'}
           </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setTechnologyPickerOpen((open) => !open)}
+              disabled={nodes.length === 0}
+              aria-expanded={technologyPickerOpen}
+              aria-haspopup="true"
+              aria-controls="discovery-technology-filters"
+              className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm bg-white hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2"
+            >
+              <span>
+                {selectedTechnologies.size === 0
+                  ? 'All technologies'
+                  : `${selectedTechnologies.size} selected`}
+              </span>
+              <span className="text-xs text-gray-400">
+                {filteredGraph.nodes.length}/{nodes.length}
+              </span>
+            </button>
+            {technologyPickerOpen && (
+              <div
+                id="discovery-technology-filters"
+                className="absolute right-0 mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-30"
+              >
+                <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
+                  <p className="text-xs font-semibold text-gray-700">Filter by technology</p>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTechnologies(new Set())}
+                    className="text-xs text-azure-600 hover:underline"
+                  >
+                    Show all
+                  </button>
+                </div>
+                <ul className="py-1 max-h-72 overflow-y-auto">
+                  {availableTechnologies.map((technology) => (
+                    <li key={technology.key}>
+                      <label className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedTechnologies.has(technology.key)}
+                          onChange={() => toggleTechnology(technology.key)}
+                        />
+                        <span className="flex-1">{technology.label}</span>
+                        <span className="text-xs tabular-nums text-gray-400">{technology.count}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+                <p className="px-3 py-2 border-t border-gray-100 text-[11px] text-gray-500">
+                  Select one or more technologies. No selection shows everything.
+                </p>
+              </div>
+            )}
+          </div>
           <button
             onClick={() => setReplicateOpen(true)}
             disabled={selectedSubIds.length === 0 || nodes.length === 0}
@@ -567,8 +662,8 @@ export default function DiscoveryView() {
         )}
         <div className="flex-1 bg-white border border-gray-200 rounded-xl overflow-hidden">
           <ReactFlow
-            nodes={renderedNodes}
-            edges={renderedEdges}
+            nodes={filteredGraph.nodes}
+            edges={filteredGraph.edges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
@@ -594,7 +689,7 @@ export default function DiscoveryView() {
           </ReactFlow>
         </div>
       </div>
-      {selectedResource && (
+      {selectedResource && selectedNodeId && visibleNodeIds.has(selectedNodeId) && (
         <ResourcePanel
           resource={selectedResource}
           onClose={() => {
