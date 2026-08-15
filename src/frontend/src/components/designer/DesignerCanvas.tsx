@@ -26,7 +26,13 @@ import { canConnect, canContain, isContainer, containerSize } from './relationsh
 import { bestPracticeService, type DesignFinding } from '@/services/bestPracticeService'
 import { generateBicep } from './bicepGenerator'
 import BicepModal from './BicepModal'
+import DesignImportDialog from './DesignImportDialog'
 import type { DesignBlock } from '@/types/designer'
+import type { DesignImportProposal } from '@/services/designImportService'
+import {
+  applyDesignImport,
+  type DesignImportApplyMode,
+} from '@/utils/designImportApply'
 
 interface EdgeData {
   relationship?: string
@@ -61,8 +67,9 @@ function CanvasInner() {
   const [acknowledged, setAcknowledged] = useState<Set<string>>(new Set())
   const [toast, setToast] = useState<{ kind: 'error' | 'info'; msg: string } | null>(null)
   const [bicepCode, setBicepCode] = useState<string | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
-  const { screenToFlowPosition, getIntersectingNodes } = useReactFlow()
+  const { screenToFlowPosition, getIntersectingNodes, fitView } = useReactFlow()
 
   const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null
   const selectedEdge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) : null
@@ -361,6 +368,26 @@ function CanvasInner() {
     setBicepCode(code)
   }
 
+  const handleApplyImport = (
+    proposal: DesignImportProposal,
+    selectedNodeIds: ReadonlySet<string>,
+    mode: DesignImportApplyMode,
+  ) => {
+    const result = applyDesignImport(proposal, selectedNodeIds, nodes, edges, mode)
+    setNodes(result.nodes)
+    setEdges(result.edges)
+    setSelectedNodeId(null)
+    setSelectedEdgeId(null)
+    setFindings(null)
+    setAcknowledged(new Set())
+    setImportOpen(false)
+    window.requestAnimationFrame(() => void fitView({ padding: 0.15, duration: 300 }))
+    const warningSuffix = result.warnings.length > 0
+      ? ` ${result.warnings.length} unsupported relationship(s) were skipped.`
+      : ''
+    showToast('info', `Imported ${selectedNodeIds.size} resource(s).${warningSuffix}`)
+  }
+
   /** Stable key for a finding's acknowledgement state. */
   const ackKey = (f: ValidationFinding, idx: number) =>
     `${f.ruleId}::${f.nodeId ?? 'global'}::${idx}`
@@ -402,6 +429,18 @@ function CanvasInner() {
                 {nodes.length} block{nodes.length !== 1 ? 's' : ''}
               </span>
             )}
+
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              className="flex items-center gap-1.5 text-xs text-azure-700 hover:text-azure-900 bg-azure-50 hover:bg-azure-100 px-3 py-1.5 rounded-lg border border-azure-200 transition-all"
+              title="Import an architecture image, PDF, or draw.io file"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" d="M12 16V4m0 0L7 9m5-5l5 5M5 20h14" />
+              </svg>
+              Import design
+            </button>
 
             <button
               onClick={clearCanvas}
@@ -664,6 +703,14 @@ function CanvasInner() {
 
       {bicepCode && (
         <BicepModal bicep={bicepCode} onClose={() => setBicepCode(null)} />
+      )}
+
+      {importOpen && (
+        <DesignImportDialog
+          existingNodeCount={nodes.length}
+          onApply={handleApplyImport}
+          onClose={() => setImportOpen(false)}
+        />
       )}
     </div>
   )

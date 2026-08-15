@@ -19,6 +19,15 @@ param apiClientId string
 @description('Fully qualified EasyAzure API container image, including an immutable tag or approved channel tag.')
 param apiContainerImage string
 
+@description('Azure OpenAI endpoint used for AI validation and multimodal design import.')
+param azureOpenAIEndpoint string
+
+@description('Vision-capable Azure OpenAI deployment used for design analysis.')
+param azureOpenAIDeploymentName string = 'gpt-4o-mini'
+
+@description('Azure OpenAI inference API version.')
+param azureOpenAIApiVersion string = '2024-10-21'
+
 @description('Object ID of the admin user or group for initial Key Vault access policy.')
 param adminObjectId string
 
@@ -149,6 +158,9 @@ module apiApp 'modules/container-apps.bicep' = {
       { name: 'AzureAd__ClientId', value: apiClientId }
       { name: 'AzureAd__Audience', value: 'api://${apiClientId}' }
       { name: 'AllowedOrigins__0', value: 'https://${staticWebApp.outputs.defaultHostname}' }
+      { name: 'AzureOpenAI__Endpoint', value: azureOpenAIEndpoint }
+      { name: 'AzureOpenAI__DeploymentName', value: azureOpenAIDeploymentName }
+      { name: 'AzureOpenAI__ApiVersion', value: azureOpenAIApiVersion }
     ]
     tags: tags
   }

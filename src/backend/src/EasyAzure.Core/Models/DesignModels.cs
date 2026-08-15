@@ -31,6 +31,68 @@ public record DesignEdge
 
 public record CreateEnvironmentRequest(string Name);
 
+public record DesignImportRequest
+{
+    public required string FileName { get; init; }
+    public required string DocumentType { get; init; } // image | pdf | drawio
+    public string? TextContent { get; init; }
+    public IReadOnlyList<DesignImportImage> Images { get; init; } = [];
+    public IReadOnlyList<DesignImportHint> DiagramHints { get; init; } = [];
+}
+
+public record DesignImportImage
+{
+    public required string DataUrl { get; init; }
+    public int PageNumber { get; init; }
+}
+
+public record DesignImportHint
+{
+    public required string Id { get; init; }
+    public required string Label { get; init; }
+    public string? Style { get; init; }
+    public string Kind { get; init; } = "shape";
+    public double X { get; init; }
+    public double Y { get; init; }
+    public double Width { get; init; }
+    public double Height { get; init; }
+    public string? ParentId { get; init; }
+    public string? SourceId { get; init; }
+    public string? TargetId { get; init; }
+}
+
+public record DesignImportProposal
+{
+    public required string Summary { get; init; }
+    public required string SourceFileName { get; init; }
+    public required string Model { get; init; }
+    public IReadOnlyList<DesignImportNode> Nodes { get; init; } = [];
+    public IReadOnlyList<DesignImportEdge> Edges { get; init; } = [];
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+}
+
+public record DesignImportNode
+{
+    public required string Id { get; init; }
+    public required string BlockType { get; init; }
+    public required string Label { get; init; }
+    public double X { get; init; }
+    public double Y { get; init; }
+    public string? ParentId { get; init; }
+    public double Confidence { get; init; }
+    public string Evidence { get; init; } = string.Empty;
+}
+
+public record DesignImportEdge
+{
+    public required string Id { get; init; }
+    public required string Source { get; init; }
+    public required string Target { get; init; }
+    public required string Relationship { get; init; }
+    public double Confidence { get; init; }
+    public string Evidence { get; init; } = string.Empty;
+}
+
 public record ValidationResult
 {
     public bool IsValid { get; init; }

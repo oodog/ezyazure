@@ -11,10 +11,12 @@ namespace EasyAzure.Api.Controllers;
 public class DesignerController : ControllerBase
 {
     private readonly IDesignerService _designer;
+    private readonly IDesignImportService _designImport;
 
-    public DesignerController(IDesignerService designer)
+    public DesignerController(IDesignerService designer, IDesignImportService designImport)
     {
         _designer = designer;
+        _designImport = designImport;
     }
 
     [HttpGet]
@@ -56,5 +58,36 @@ public class DesignerController : ControllerBase
     {
         var result = await _designer.ValidateAsync(id, ct);
         return Ok(result);
+    }
+
+    [HttpPost("import/analyze")]
+    [RequestSizeLimit(25_000_000)]
+    public async Task<ActionResult<DesignImportProposal>> AnalyzeImport(
+        [FromBody] DesignImportRequest request,
+        CancellationToken ct)
+    {
+        try
+        {
+            var proposal = await _designImport.AnalyzeAsync(request, ct);
+            return Ok(proposal);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Title = "The document could not be analyzed",
+                Detail = ex.Message,
+                Status = StatusCodes.Status400BadRequest,
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails
+            {
+                Title = "Azure AI document analysis is unavailable",
+                Detail = ex.Message,
+                Status = StatusCodes.Status503ServiceUnavailable,
+            });
+        }
     }
 }

@@ -120,6 +120,27 @@ cd src/backend
 dotnet test EasyAzure.sln --logger "console;verbosity=normal"
 ```
 
+## Import architecture documents
+
+The Designer can analyze PNG, JPEG, WebP, PDF, `.drawio`, and draw.io XML files.
+Imports are review-first: Azure AI returns a typed proposal, the user selects the
+resources to keep, and then chooses whether to merge with or replace the current
+canvas. The model never writes directly to a saved environment.
+
+Operational limits:
+
+- Maximum source file size: 15 MB.
+- PDF analysis: first eight pages, rendered in the browser with bounded dimensions.
+- Images: PNG, JPEG, or WebP only.
+- Draw.io: plain or compressed mxGraph XML; DTD/entity declarations are rejected.
+- Maximum proposal: 120 resources and 240 relationships.
+
+The API uses `AzureOpenAI__Endpoint`, `AzureOpenAI__DeploymentName`, and
+`AzureOpenAI__ApiVersion`. The deployment must support vision and structured
+outputs; staging uses `gpt-4o-mini` with API version `2024-10-21`. Grant the API
+managed identity **Cognitive Services OpenAI User** on the Azure OpenAI account.
+No Azure OpenAI key is required when managed identity is configured.
+
 ## Deploy infrastructure to Azure
 
 ```bash

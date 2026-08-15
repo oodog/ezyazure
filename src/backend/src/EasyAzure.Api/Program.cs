@@ -32,6 +32,7 @@ builder.Services.AddScoped<EasyAzure.DataPath.Services.RouteEvaluator>();
 builder.Services.AddScoped<EasyAzure.DataPath.Services.PeeringEvaluator>();
 builder.Services.AddScoped<IDataPathService, DataPathService>();
 builder.Services.AddScoped<IDesignerService, DesignerService>();
+builder.Services.AddScoped<IDesignImportService, DesignImportService>();
 builder.Services.AddScoped<IBestPracticeEngine, BestPracticeEngine>();
 builder.Services.AddScoped<IRoutingAnalysisService, RoutingAnalysisService>();
 builder.Services.AddScoped<IBicepGeneratorService, BicepGeneratorService>();

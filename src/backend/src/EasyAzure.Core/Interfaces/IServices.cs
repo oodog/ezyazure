@@ -41,6 +41,15 @@ public interface IDesignerService
     Task<ValidationResult> ValidateAsync(string environmentId, CancellationToken ct = default);
 }
 
+public interface IDesignImportService
+{
+    /// <summary>
+    /// Analyses untrusted document evidence and returns a reviewable design proposal.
+    /// This method never mutates or persists a Designer environment.
+    /// </summary>
+    Task<DesignImportProposal> AnalyzeAsync(DesignImportRequest request, CancellationToken ct = default);
+}
+
 public interface IBestPracticeEngine
 {
     Task<BestPracticeReport> RunReviewAsync(string? subscriptionId, CancellationToken ct = default);

@@ -13,4 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="..\EasyAzure.Core\EasyAzure.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="EasyAzure.Tests" />
+  </ItemGroup>
 </Project>
