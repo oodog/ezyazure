@@ -5,11 +5,10 @@ import ReactFlow, {
   MiniMap,
   useNodesState,
   useEdgesState,
-  addEdge,
-  Connection,
   MarkerType,
   type Edge,
   type Node,
+  type ReactFlowInstance,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import { useParams } from 'react-router-dom'
@@ -21,15 +20,18 @@ import DiscoveryResourceNode from './DiscoveryResourceNode'
 import RoutingFindingsPanel from './RoutingFindingsPanel'
 import DataPathPanel from './DataPathPanel'
 import VersionHistoryPanel from './VersionHistoryPanel'
+import TopologyScopePanel from './TopologyScopePanel'
 import { useManualSubscriptions, isValidSubscriptionId } from '@/hooks/useManualSubscriptions'
 import type { AzureResource, DiscoveryCoverage, FlowEdge as ApiFlowEdge, FlowNode as ApiFlowNode } from '@/types/azure'
 import { applyDagreLayout } from '@/utils/dagreLayout'
 import { loadDiscoveryCache, saveDiscoveryCache } from '@/utils/discoveryCache'
+import { getVmPrivateIps } from '@/utils/azureResourceDetails'
 import {
   discoveryTechnologies,
-  filterDiscoveryGraph,
+  filterDiscoveryGraphByView,
   getDiscoveryTechnology,
   type DiscoveryTechnology,
+  type DiscoveryTopologyView,
 } from '@/utils/discoveryTechnology'
 
 const nodeTypes = { azureResource: DiscoveryResourceNode }
@@ -49,16 +51,19 @@ function edgeStyleFor(category: string | undefined) {
         strokeWidth: 3,
         animated: true,
         dash: undefined,
+        opacity: 1,
       }
     case 'peering':
-      return { stroke: '#2563eb', strokeWidth: 2, animated: false, dash: '6 4' }
+      return { stroke: '#2563eb', strokeWidth: 2, animated: false, dash: '6 4', opacity: 0.75 }
     case 'route':
-      return { stroke: '#f59e0b', strokeWidth: 2, animated: false, dash: undefined }
+      return { stroke: '#f59e0b', strokeWidth: 2, animated: false, dash: undefined, opacity: 0.7 }
     case 'associatedWith':
-      return { stroke: '#be185d', strokeWidth: 2.5, animated: false, dash: undefined }
+      return { stroke: '#be185d', strokeWidth: 2, animated: false, dash: undefined, opacity: 0.65 }
+    case 'connectedTo':
+      return { stroke: '#059669', strokeWidth: 2, animated: false, dash: '3 3', opacity: 0.7 }
     case 'contains':
     default:
-      return { stroke: '#cbd5e1', strokeWidth: 1.5, animated: false, dash: undefined }
+      return { stroke: '#94a3b8', strokeWidth: 1.25, animated: false, dash: undefined, opacity: 0.45 }
   }
 }
 
@@ -83,6 +88,7 @@ function toReactFlowEdge(e: ApiFlowEdge): Edge {
       stroke: s.stroke,
       strokeWidth: s.strokeWidth,
       strokeDasharray: s.dash,
+      opacity: s.opacity,
     },
     labelStyle: { fontSize: 10, fontWeight: 600, fill: s.stroke },
     labelBgStyle: { fill: '#ffffff', fillOpacity: 0.9 },
@@ -97,6 +103,7 @@ export default function DiscoveryView() {
   const { subscriptionId } = useParams()
   const [nodes, setNodes, onNodesChange] = useNodesState<AzureResource>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null)
   const [selectedResource, setSelectedResource] = useState<AzureResource | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -109,7 +116,7 @@ export default function DiscoveryView() {
     () => new Set(subscriptionId ? [subscriptionId] : []),
   )
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [technologyPickerOpen, setTechnologyPickerOpen] = useState(false)
+  const [topologyView, setTopologyView] = useState<DiscoveryTopologyView>('network')
   const [selectedTechnologies, setSelectedTechnologies] = useState<Set<DiscoveryTechnology>>(
     () => new Set(),
   )
@@ -274,16 +281,24 @@ export default function DiscoveryView() {
 
   // Source VMs available for the data-path tracer.
   const vmOptions = useMemo(
-    () =>
-      nodes
+    () => {
+      const nodeById = new Map(nodes.map((node) => [node.id, node]))
+      return nodes
         .filter((n) => n.data?.type?.toLowerCase() === 'microsoft.compute/virtualmachines')
         .map((n) => ({
           id: n.id,
           name: n.data?.name ?? n.id,
           resourceGroup: n.data?.resourceGroup ?? '',
+          subnetName: edges
+            .filter((edge) => edge.source === n.id)
+            .map((edge) => nodeById.get(edge.target))
+            .find((target) => target?.data.type.toLowerCase() === 'microsoft.network/virtualnetworks/subnets')
+            ?.data.name,
+          privateIps: getVmPrivateIps(n.data),
         }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [nodes],
+        .sort((a, b) => a.name.localeCompare(b.name))
+    },
+    [nodes, edges],
   )
 
   const tracePath = useCallback(
@@ -315,11 +330,6 @@ export default function DiscoveryView() {
       }
     },
     [selectedSubIds],
-  )
-
-  const onConnect = useCallback(
-    (params: Connection) => setEdges((eds) => addEdge(params, eds)),
-    [setEdges],
   )
 
   const selectedLabel = useMemo(() => {
@@ -440,18 +450,74 @@ export default function DiscoveryView() {
     })
   }, [nodes, highlightNodeIds])
 
-  const filteredGraph = useMemo(
-    () => filterDiscoveryGraph(renderedNodes, renderedEdges, selectedTechnologies),
-    [renderedNodes, renderedEdges, selectedTechnologies],
-  )
+  const filteredGraph = useMemo(() => {
+    const filtered = filterDiscoveryGraphByView(
+      renderedNodes,
+      renderedEdges,
+      topologyView,
+      selectedTechnologies,
+    )
+    return {
+      nodes: applyDagreLayout(filtered.nodes, filtered.edges),
+      edges: filtered.edges,
+    }
+  }, [renderedNodes, renderedEdges, topologyView, selectedTechnologies])
 
   const visibleNodeIds = useMemo(
     () => new Set(filteredGraph.nodes.map((node) => node.id)),
     [filteredGraph.nodes],
   )
 
+  useEffect(() => {
+    if (!flowInstance || filteredGraph.nodes.length === 0) return
+    const frame = window.requestAnimationFrame(() => {
+      void flowInstance.fitView({ padding: 0.18, duration: 250 })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [flowInstance, topologyView, selectedTechnologies, filteredGraph.nodes.length])
+
   return (
-    <div className="flex h-full gap-4">
+    <div className="flex h-full gap-3">
+      {dataPathOpen ? (
+        <DataPathPanel
+          placement="left"
+          vms={vmOptions}
+          result={dataPathResult}
+          loading={dataPathLoading}
+          error={dataPathError}
+          onTrace={tracePath}
+          onClose={() => {
+            setDataPathOpen(false)
+            setDataPathResult(null)
+            setDataPathError(null)
+            setPathNodeIds([])
+            setHighlightNodeIds([])
+          }}
+        />
+      ) : (
+        <TopologyScopePanel
+          view={topologyView}
+          onViewChange={(view) => {
+            setTopologyView(view)
+            setSelectedNodeId(null)
+            setSelectedResource(null)
+            setHighlightNodeIds([])
+            setPathNodeIds([])
+          }}
+          technologies={availableTechnologies}
+          selectedTechnologies={selectedTechnologies}
+          onToggleTechnology={toggleTechnology}
+          onClearTechnologies={() => setSelectedTechnologies(new Set())}
+          visibleCount={filteredGraph.nodes.length}
+          totalCount={nodes.length}
+          routingLoading={routingLoading}
+          onAnalyzeRouting={() => analyzeRouting(false)}
+          onOpenDataPath={() => {
+            setTopologyView('network-compute')
+            setDataPathOpen(true)
+          }}
+        />
+      )}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex items-center gap-3 mb-4 flex-wrap">
           <h1 className="text-xl font-bold text-gray-900">Discovery</h1>
@@ -552,61 +618,6 @@ export default function DiscoveryView() {
           >
             {loading ? 'Discovering…' : 'Discover'}
           </button>
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setTechnologyPickerOpen((open) => !open)}
-              disabled={nodes.length === 0}
-              aria-expanded={technologyPickerOpen}
-              aria-haspopup="true"
-              aria-controls="discovery-technology-filters"
-              className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm bg-white hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2"
-            >
-              <span>
-                {selectedTechnologies.size === 0
-                  ? 'All technologies'
-                  : `${selectedTechnologies.size} selected`}
-              </span>
-              <span className="text-xs text-gray-400">
-                {filteredGraph.nodes.length}/{nodes.length}
-              </span>
-            </button>
-            {technologyPickerOpen && (
-              <div
-                id="discovery-technology-filters"
-                className="absolute right-0 mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-30"
-              >
-                <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
-                  <p className="text-xs font-semibold text-gray-700">Filter by technology</p>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedTechnologies(new Set())}
-                    className="text-xs text-azure-600 hover:underline"
-                  >
-                    Show all
-                  </button>
-                </div>
-                <ul className="py-1 max-h-72 overflow-y-auto">
-                  {availableTechnologies.map((technology) => (
-                    <li key={technology.key}>
-                      <label className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-50 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={selectedTechnologies.has(technology.key)}
-                          onChange={() => toggleTechnology(technology.key)}
-                        />
-                        <span className="flex-1">{technology.label}</span>
-                        <span className="text-xs tabular-nums text-gray-400">{technology.count}</span>
-                      </label>
-                    </li>
-                  ))}
-                </ul>
-                <p className="px-3 py-2 border-t border-gray-100 text-[11px] text-gray-500">
-                  Select one or more technologies. No selection shows everything.
-                </p>
-              </div>
-            )}
-          </div>
           <button
             onClick={() => setReplicateOpen(true)}
             disabled={selectedSubIds.length === 0 || nodes.length === 0}
@@ -614,22 +625,6 @@ export default function DiscoveryView() {
             className="bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
           >
             Replicate to new subscription
-          </button>
-          <button
-            onClick={() => analyzeRouting(false)}
-            disabled={selectedSubIds.length === 0 || nodes.length === 0 || routingLoading}
-            title="Detect asymmetric routing and forced-tunnel mismatches across VNet peerings."
-            className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
-          >
-            {routingLoading ? 'Analyzing…' : 'Analyze routing'}
-          </button>
-          <button
-            onClick={() => setDataPathOpen((v) => !v)}
-            disabled={nodes.length === 0}
-            title="Trace the network data path from a source VM to a destination IP or resource and highlight it on the map."
-            className="bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
-          >
-            Trace data path
           </button>
           <button
             onClick={() => setVersionOpen((v) => !v)}
@@ -660,20 +655,33 @@ export default function DiscoveryView() {
             </ul>
           </div>
         )}
-        <div className="flex-1 bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="relative flex-1 bg-white border border-gray-200 rounded-lg overflow-hidden">
+          {nodes.length > 0 && filteredGraph.nodes.length === 0 && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+              <div className="max-w-xs text-center px-5 py-4 bg-white border border-gray-200 rounded-lg shadow-sm">
+                <p className="text-sm font-semibold text-gray-800">No resources in this view</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Choose Full inventory or clear the technology selections.
+                </p>
+              </div>
+            </div>
+          )}
           <ReactFlow
             nodes={filteredGraph.nodes}
             edges={filteredGraph.edges}
             nodeTypes={nodeTypes}
+            onInit={setFlowInstance}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
+            nodesDraggable={false}
+            nodesConnectable={false}
             onNodeClick={(_, node) => {
               setSelectedNodeId(node.id)
               setSelectedResource(node.data as AzureResource)
               setHighlightNodeIds([])
             }}
             fitView
+            fitViewOptions={{ padding: 0.18 }}
           >
             <Background />
             <Controls />
@@ -683,8 +691,9 @@ export default function DiscoveryView() {
               <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#dc2626' }} /> <span className="font-semibold text-red-700">Default route (0.0.0.0/0)</span></div>
               <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#2563eb', borderTop: '1px dashed #2563eb' }} /> VNet peering</div>
               <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#f59e0b' }} /> Route table (UDR)</div>
-              <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#94a3b8' }} /> Association</div>
-              <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#cbd5e1' }} /> VNet → Subnet</div>
+              <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#be185d' }} /> Security / association</div>
+              <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#059669' }} /> Private Link / connection</div>
+              <div className="flex items-center gap-2"><span className="inline-block w-6 h-0.5" style={{ backgroundColor: '#94a3b8' }} /> VNet → Subnet</div>
             </div>
           </ReactFlow>
         </div>
@@ -707,22 +716,6 @@ export default function DiscoveryView() {
           onAskAi={() => analyzeRouting(true)}
           onClose={() => {
             setRoutingOpen(false)
-            setHighlightNodeIds([])
-          }}
-        />
-      )}
-      {dataPathOpen && (
-        <DataPathPanel
-          vms={vmOptions}
-          result={dataPathResult}
-          loading={dataPathLoading}
-          error={dataPathError}
-          onTrace={tracePath}
-          onClose={() => {
-            setDataPathOpen(false)
-            setDataPathResult(null)
-            setDataPathError(null)
-            setPathNodeIds([])
             setHighlightNodeIds([])
           }}
         />

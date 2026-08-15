@@ -3,6 +3,7 @@ import type { Edge, Node } from 'reactflow'
 import type { AzureResource } from '@/types/azure'
 import {
   filterDiscoveryGraph,
+  filterDiscoveryGraphByView,
   getDiscoveryTechnology,
   type DiscoveryTechnology,
 } from './discoveryTechnology'
@@ -42,6 +43,71 @@ describe('discovery technology filters', () => {
 
     expect(result.nodes).toBe(nodes)
     expect(result.edges).toBe(edges)
+  })
+
+  it('shows network resources and Private Link targets in network view', () => {
+    const nodes: Node<AzureResource>[] = [
+      node('vnet', 'Microsoft.Network/virtualNetworks'),
+      node('pe', 'Microsoft.Network/privateEndpoints'),
+      node('storage', 'Microsoft.Storage/storageAccounts'),
+      node('identity', 'Microsoft.ManagedIdentity/userAssignedIdentities'),
+      node('vm', 'Microsoft.Compute/virtualMachines'),
+    ]
+    const edges: Edge[] = [
+      { id: 'vnet-pe', source: 'vnet', target: 'pe' },
+      {
+        id: 'pe-storage',
+        source: 'pe',
+        target: 'storage',
+        data: { metadata: { relationship: 'privateLinkService' } },
+      },
+      { id: 'identity-storage', source: 'identity', target: 'storage' },
+    ]
+
+    const result = filterDiscoveryGraphByView(nodes, edges, 'network', new Set())
+
+    expect(result.nodes.map((item) => item.id)).toEqual(['vnet', 'pe', 'storage'])
+    expect(result.edges.map((item) => item.id)).toEqual(['vnet-pe', 'pe-storage'])
+  })
+
+  it('adds VM endpoints only in network and compute view', () => {
+    const nodes = [
+      node('subnet', 'Microsoft.Network/virtualNetworks/subnets'),
+      node('vm', 'Microsoft.Compute/virtualMachines'),
+      node('disk', 'Microsoft.Compute/disks'),
+    ]
+    const edges: Edge[] = [
+      { id: 'subnet-vm', source: 'subnet', target: 'vm' },
+      { id: 'vm-disk', source: 'vm', target: 'disk' },
+    ]
+
+    const result = filterDiscoveryGraphByView(nodes, edges, 'network-compute', new Set())
+
+    expect(result.nodes.map((item) => item.id)).toEqual(['subnet', 'vm'])
+    expect(result.edges.map((item) => item.id)).toEqual(['subnet-vm'])
+  })
+
+  it('adds only PaaS workloads with a proven network attachment', () => {
+    const nodes = [
+      node('subnet', 'Microsoft.Network/virtualNetworks/subnets'),
+      node('integrated-app', 'Microsoft.Web/sites'),
+      node('public-app', 'Microsoft.Web/sites'),
+      node('identity', 'Microsoft.ManagedIdentity/userAssignedIdentities'),
+    ]
+    const edges: Edge[] = [
+      {
+        id: 'subnet-app',
+        source: 'integrated-app',
+        target: 'subnet',
+        data: { category: 'connectedTo' },
+      },
+      { id: 'app-identity', source: 'public-app', target: 'identity' },
+    ]
+
+    const result = filterDiscoveryGraphByView(nodes, edges, 'network-compute', new Set())
+
+    expect(result.nodes.map((item) => item.id)).toEqual(['subnet', 'integrated-app'])
+    expect(result.edges.map((item) => item.id)).toEqual(['subnet-app'])
   })
 })
 

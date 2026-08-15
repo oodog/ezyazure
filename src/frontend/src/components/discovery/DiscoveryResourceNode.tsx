@@ -22,6 +22,40 @@ function categorise(type: string): { label: string; accent: string } {
     return { label: 'Route Table', accent: '#f59e0b' }
   if (t === 'microsoft.network/privateendpoints')
     return { label: 'Private Endpoint', accent: '#10b981' }
+  if (t === 'microsoft.network/privatelinkservices')
+    return { label: 'Private Link Service', accent: '#059669' }
+  if (t === 'microsoft.network/azurefirewalls')
+    return { label: 'Azure Firewall', accent: '#dc2626' }
+  if (t === 'microsoft.network/applicationgateways')
+    return { label: 'Application Gateway', accent: '#d97706' }
+  if (t === 'microsoft.network/loadbalancers')
+    return { label: 'Load Balancer', accent: '#0891b2' }
+  if (t === 'microsoft.network/publicipaddresses')
+    return { label: 'Public IP', accent: '#0284c7' }
+  if (t === 'microsoft.network/natgateways')
+    return { label: 'NAT Gateway', accent: '#0f766e' }
+  if (t === 'microsoft.network/virtualnetworkgateways')
+    return { label: 'VNet Gateway', accent: '#7c3aed' }
+  if (t === 'microsoft.network/localnetworkgateways')
+    return { label: 'Local Gateway', accent: '#6d28d9' }
+  if (t === 'microsoft.network/connections')
+    return { label: 'Gateway Connection', accent: '#8b5cf6' }
+  if (t === 'microsoft.network/virtualwans')
+    return { label: 'Virtual WAN', accent: '#4f46e5' }
+  if (t === 'microsoft.network/virtualhubs')
+    return { label: 'Virtual Hub', accent: '#6366f1' }
+  if (t === 'microsoft.network/vpngateways')
+    return { label: 'VPN Gateway', accent: '#7c3aed' }
+  if (t === 'microsoft.network/vpnsites')
+    return { label: 'VPN Site', accent: '#8b5cf6' }
+  if (t === 'microsoft.network/expressroutecircuits')
+    return { label: 'ExpressRoute Circuit', accent: '#9333ea' }
+  if (t === 'microsoft.network/expressroutegateways')
+    return { label: 'ExpressRoute Gateway', accent: '#7e22ce' }
+  if (t === 'microsoft.network/bastionhosts')
+    return { label: 'Azure Bastion', accent: '#0369a1' }
+  if (t === 'microsoft.avs/privateclouds')
+    return { label: 'AVS Private Cloud', accent: '#2563eb' }
   if (t === 'easyazure.network/internet')
     return { label: 'Internet', accent: '#0ea5e9' }
   if (t === 'microsoft.compute/virtualmachines')

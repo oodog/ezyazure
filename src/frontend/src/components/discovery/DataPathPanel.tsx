@@ -5,6 +5,8 @@ interface VmOption {
   id: string
   name: string
   resourceGroup: string
+  subnetName?: string
+  privateIps?: string[]
 }
 
 interface DataPathPanelProps {
@@ -19,6 +21,7 @@ interface DataPathPanelProps {
     destinationPort: number
   }) => void
   onClose: () => void
+  placement?: 'left' | 'right'
 }
 
 const PROTOCOLS = ['TCP', 'UDP', 'ICMP', '*']
@@ -35,6 +38,7 @@ export default function DataPathPanel({
   error,
   onTrace,
   onClose,
+  placement = 'right',
 }: DataPathPanelProps) {
   const [search, setSearch] = useState('')
   const [dropdownOpen, setDropdownOpen] = useState(false)
@@ -83,7 +87,7 @@ export default function DataPathPanel({
   }
 
   return (
-    <aside className="w-96 shrink-0 bg-white border border-gray-200 rounded-xl flex flex-col overflow-hidden">
+    <aside className={`${placement === 'left' ? 'w-64 xl:w-72 2xl:w-80' : 'w-96'} shrink-0 bg-white border border-gray-200 rounded-lg flex flex-col overflow-hidden`}>
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
         <h2 className="font-semibold text-gray-900">Trace data path</h2>
         <button onClick={onClose} className="text-gray-400 hover:text-gray-700" title="Close">
@@ -107,6 +111,19 @@ export default function DataPathPanel({
               <path strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
             </svg>
           </button>
+          {selectedVm && (
+            <div className="mt-1.5 px-2.5 py-2 bg-gray-50 border border-gray-100 rounded-md text-[11px] text-gray-600">
+              <div className="truncate">{selectedVm.resourceGroup}</div>
+              {selectedVm.subnetName && (
+                <div className="truncate text-gray-500">Subnet: {selectedVm.subnetName}</div>
+              )}
+              {selectedVm.privateIps && selectedVm.privateIps.length > 0 && (
+                <div className="truncate font-mono text-blue-700">
+                  {selectedVm.privateIps.join(', ')}
+                </div>
+              )}
+            </div>
+          )}
           {dropdownOpen && (
             <div className="absolute z-30 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg">
               <div className="p-2 border-b border-gray-100">
