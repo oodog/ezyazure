@@ -7,6 +7,9 @@
 
 import type { Edge, Node } from 'reactflow'
 import type { DesignBlock } from '@/types/designer'
+import { canConnect, canContain } from './relationships'
+import { analyzeDesignDelta } from '@/utils/designDelta'
+import type { DesignEdgeData } from '@/utils/designEdges'
 
 export type Severity = 'error' | 'warning' | 'info'
 
@@ -58,7 +61,31 @@ function isRfc1918(cidr: string): boolean {
   return false
 }
 
-export function validateDesign(nodes: DesignNode[], _edges: Edge[]): ValidationFinding[] {
+function ipv4Value(ip: string): number | null {
+  const octets = ip.split('.').map(Number)
+  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255))
+    return null
+  return (((octets[0] << 24) >>> 0) + (octets[1] << 16) + (octets[2] << 8) + octets[3]) >>> 0
+}
+function cidrContainsIp(cidr: string, ip: string): boolean {
+  const parsed = parseCidr(cidr)
+  const address = ipv4Value(ip)
+  if (!parsed || address === null) return false
+  const mask = parsed.prefix === 0 ? 0 : (~0 << (32 - parsed.prefix)) >>> 0
+  return (address & mask) === (parsed.network & mask)
+}
+function parseRouteLines(value: unknown): Array<{ name: string; prefix: string; nextHopType: string; nextHopIp: string }> {
+  if (typeof value !== 'string') return []
+  return value.split(/\r?\n/).map((line) => {
+    const [name = '', prefix = '', nextHopType = '', nextHopIp = ''] = line.split('|').map((part) => part.trim())
+    return { name, prefix, nextHopType, nextHopIp }
+  }).filter((route) => route.prefix.length > 0)
+}
+function routePolicyEnabled(value: unknown): boolean {
+  return value === 'Enabled' || value === 'RouteTableEnabled'
+}
+
+export function validateDesign(nodes: DesignNode[], edges: Edge[]): ValidationFinding[] {
   const findings: ValidationFinding[] = []
   const byType = (t: string) => nodes.filter((n) => n.data?.blockType === t)
   const add = (
@@ -87,6 +114,84 @@ export function validateDesign(nodes: DesignNode[], _edges: Edge[]): ValidationF
     }
     if (t === 'Private Endpoint' && parentTypeOf(n) !== 'Subnet') {
       add('error', 'PE.Parent', `Private Endpoint "${n.data.label}" must be placed inside a Subnet.`, n.id)
+    }
+  }
+
+  // ───────── Relationship rules ─────────
+  const seenRelationships = new Set<string>()
+  for (const edge of edges) {
+    const source = nodeById.get(edge.source)
+    const target = nodeById.get(edge.target)
+    if (!source || !target) {
+      add('error', 'Relationship.Dangling',
+        `Relationship "${String(edge.label ?? edge.id)}" references a resource that is not in the design.`)
+      continue
+    }
+    if (source.id === target.id) {
+      add('error', 'Relationship.SelfReference',
+        `Resource "${source.data.label}" cannot link to itself.`, source.id)
+      continue
+    }
+    const relationship = String((edge.data as { relationship?: string } | undefined)?.relationship ?? edge.label ?? '')
+    const isContainment = relationship.toLowerCase() === 'contains'
+    if (isContainment) {
+      const targetParentId = target.parentId ?? target.parentNode
+      if (!canContain(source.data.blockType, target.data.blockType) || targetParentId !== source.id) {
+        add('error', 'Relationship.Containment.Invalid',
+          `"${source.data.label}" cannot contain "${target.data.label}" in this design.`, target.id)
+      }
+    } else {
+      const result = canConnect(source.data.blockType, target.data.blockType)
+      if (!result.allowed) {
+        add('error', 'Relationship.Unsupported',
+          `Unsupported link: ${source.data.blockType} "${source.data.label}" → ${target.data.blockType} "${target.data.label}". ${result.reason ?? ''}`,
+          source.id)
+      }
+    }
+    const key = `${edge.source.toLowerCase()}|${edge.target.toLowerCase()}|${relationship.toLowerCase()}`
+    if (seenRelationships.has(key)) {
+      add('warning', 'Relationship.Duplicate',
+        `Duplicate "${relationship || 'relationship'}" link between "${source.data.label}" and "${target.data.label}".`, source.id)
+    }
+    seenRelationships.add(key)
+  }
+
+  const delta = analyzeDesignDelta(nodes, edges as Edge<DesignEdgeData>[])
+  for (const unsupported of delta.unsupportedRelationships) {
+    add('error', 'Delta.Relationship.RequiresExistingUpdate',
+      `${unsupported.reason} Relationship: "${String(unsupported.edge.label ?? unsupported.edge.id)}".`,
+      unsupported.edge.source)
+  }
+  if (delta.hasBaseline) {
+    if (delta.requiredDeploymentScopes.length > 1) {
+      add('error', 'Delta.MultipleDeploymentScopes',
+        'New resources depend on discovered parents in multiple subscriptions or resource groups. Split them into separate additions-only deployments.')
+    }
+    for (const node of delta.newNodes) {
+      const resourceName = String(node.data.properties.resourceName ?? node.data.label).toLowerCase()
+      const collision = delta.existingNodes.find((existing) =>
+        existing.data.blockType === node.data.blockType &&
+        String(existing.data.properties.resourceName ?? existing.data.label).toLowerCase() === resourceName)
+      if (collision) {
+        add('error', 'Delta.NameCollision',
+          `New ${node.data.blockType} "${node.data.label}" matches discovered resource "${collision.data.label}". Rename it so additions-only deployment cannot update an existing resource.`,
+          node.id)
+      }
+    }
+  }
+
+  for (const endpoint of byType('Private Endpoint').filter((node) => node.data.origin?.kind !== 'discovered')) {
+    const targetEdge = edges.find((edge) => edge.source === endpoint.id &&
+      String((edge.data as { relationship?: string } | undefined)?.relationship ?? edge.label ?? '').toLowerCase() === 'targets')
+    if (!has(endpoint, 'targetResourceId') && !targetEdge) {
+      add('error', 'PE.Target.Required',
+        `Private Endpoint "${endpoint.data.label}" needs a target resource ID or a targets link.`, endpoint.id)
+    }
+    const targetEdgeGroupId = (targetEdge?.data as { properties?: Record<string, unknown> } | undefined)?.properties?.groupId
+    if (!has(endpoint, 'groupId') && (typeof targetEdgeGroupId !== 'string' || !targetEdgeGroupId.trim())) {
+      add('error', 'PE.GroupId.Required',
+        `Private Endpoint "${endpoint.data.label}" needs a target subresource Group ID before deployment.`, endpoint.id,
+        'https://learn.microsoft.com/azure/private-link/private-endpoint-overview')
     }
   }
 
@@ -136,6 +241,15 @@ export function validateDesign(nodes: DesignNode[], _edges: Edge[]): ValidationF
 
   // ───────── Subnet rules ─────────
   const subnets = byType('Subnet')
+  const virtualHubs = byType('Virtual Hub')
+  const hasAnyNetworkRange = vnets.some((node) => ((prop(node, 'addressSpace') as string[] | undefined) ?? []).length > 0)
+    || subnets.some((node) => typeof prop(node, 'addressPrefix') === 'string' && String(prop(node, 'addressPrefix')).length > 0)
+    || virtualHubs.some((node) => typeof prop(node, 'addressPrefix') === 'string' && String(prop(node, 'addressPrefix')).length > 0)
+  if ((vnets.length > 0 || subnets.length > 0 || virtualHubs.length > 0) && !hasAnyNetworkRange) {
+    add('warning', 'Design.IPRanges.Missing',
+      'No IP address ranges are defined in this design. Review and add RFC 1918 examples before deployment.',
+      undefined, 'https://learn.microsoft.com/azure/virtual-network/concepts-and-best-practices')
+  }
   for (const s of subnets) {
     const cidr = prop(s, 'addressPrefix') as string | undefined
     if (!cidr) {
@@ -207,7 +321,11 @@ export function validateDesign(nodes: DesignNode[], _edges: Edge[]): ValidationF
   }
   for (const h of hubs) {
     const cidr = prop(h, 'addressPrefix') as string | undefined
-    if (cidr) {
+    if (!cidr) {
+      add('error', 'VHub.Prefix.Required',
+        `Virtual Hub "${h.data.label}" has no address prefix.`, h.id,
+        'https://learn.microsoft.com/azure/virtual-wan/hub-settings')
+    } else {
       const p = parseCidr(cidr)?.prefix ?? 32
       if (p > 24) add('warning', 'VHub.Prefix.Size',
         `Virtual Hub "${h.data.label}" prefix /${p} is smaller than recommended /24 (use /23 if deploying gateways + Firewall).`,
@@ -225,6 +343,79 @@ export function validateDesign(nodes: DesignNode[], _edges: Edge[]): ValidationF
     if (internet === 'None' && priv === 'None') {
       add('warning', 'RouteIntent.NoOp',
         `Route Intent "${ri.data.label}" has no traffic types selected — it will not be applied.`, ri.id)
+    }
+  }
+
+  // ───────── Private Endpoint route symmetry ─────────
+  const privateEndpoints = byType('Private Endpoint')
+  const routeTables = byType('Route Table')
+  for (const pe of privateEndpoints) {
+    const peSubnet = parentOf(pe)
+    const peVnet = peSubnet ? parentOf(peSubnet) : undefined
+    if (!peSubnet || peSubnet.data.blockType !== 'Subnet' || !peVnet || peVnet.data.blockType !== 'VNet') continue
+
+    const pePolicy = prop(peSubnet, 'privateEndpointPolicies')
+    const connectedHubIds = new Set(
+      edges
+        .filter((edge) => edge.source === peVnet.id)
+        .map((edge) => edge.target)
+        .filter((targetId) => nodeById.get(targetId)?.data.blockType === 'Virtual Hub'),
+    )
+    const securedIntent = intents.find((intent) => {
+      const hubId = intent.parentId ?? intent.parentNode
+      return !!hubId && connectedHubIds.has(hubId) && prop(intent, 'privateTraffic') !== 'None'
+    })
+    if (securedIntent && !routePolicyEnabled(pePolicy)) {
+      add(
+        'warning',
+        'PE.VWAN.RoutePolicy',
+        `Private Endpoint "${pe.data.label}" is behind secured Virtual WAN routing intent, but subnet "${peSubnet.data.label}" has Private Endpoint route-table policy disabled. Enable RouteTableEnabled (or Enabled). Do not add the PE /32 to the vWAN Private Traffic prefixes box; Microsoft states that does not ensure symmetry.`,
+        peSubnet.id,
+        'https://learn.microsoft.com/azure/virtual-wan/how-to-routing-policies#troubleshooting',
+      )
+    }
+
+    const peIp = prop(pe, 'privateIpAddress') as string | undefined
+    if (!peIp || ipv4Value(peIp) === null) continue
+    const vnetPrefixes = ((prop(peVnet, 'addressSpace') as string[] | undefined) ?? [])
+      .map(parseCidr)
+      .filter((prefix): prefix is { network: number; prefix: number } => prefix !== null)
+      .filter((prefix) => {
+        const address = ipv4Value(peIp)!
+        const mask = prefix.prefix === 0 ? 0 : (~0 << (32 - prefix.prefix)) >>> 0
+        return (address & mask) === prefix.network
+      })
+    const requiredPrefixLength = vnetPrefixes.length > 0
+      ? Math.max(...vnetPrefixes.map((prefix) => prefix.prefix))
+      : null
+    if (requiredPrefixLength === null) continue
+
+    for (const routeTable of routeTables) {
+      const sourceSubnetIds = edges
+        .filter((edge) => edge.source === routeTable.id)
+        .map((edge) => edge.target)
+        .filter((targetId) => nodeById.get(targetId)?.data.blockType === 'Subnet')
+      if (sourceSubnetIds.length === 0) continue
+      const routes = parseRouteLines(prop(routeTable, 'routes'))
+        .filter((route) => route.nextHopType === 'VirtualAppliance' && route.nextHopIp && cidrContainsIp(route.prefix, peIp))
+      for (const broadRoute of routes) {
+        const prefix = parseCidr(broadRoute.prefix)
+        if (!prefix || prefix.prefix >= requiredPrefixLength) continue
+        const hasOverride = routes.some((route) => {
+          const parsed = parseCidr(route.prefix)
+          return route.nextHopIp === broadRoute.nextHopIp && !!parsed && parsed.prefix >= requiredPrefixLength
+        })
+        if (hasOverride) continue
+        for (const sourceSubnetId of sourceSubnetIds) {
+          add(
+            'warning',
+            'PE.UDR.Asymmetry',
+            `Route Table "${routeTable.data.label}" sends ${broadRoute.prefix} through NVA ${broadRoute.nextHopIp}, but PE ${peIp} can use its injected /32 route and bypass the NVA. Enable PE Route Table policy on "${peSubnet.data.label}" and add ${peIp}/32 (or another supported prefix at least /${requiredPrefixLength}) to this route table with the same NVA next hop. This is a UDR, not an NSG route.`,
+            sourceSubnetId,
+            'https://learn.microsoft.com/azure/private-link/disable-private-endpoint-network-policy',
+          )
+        }
+      }
     }
   }
 

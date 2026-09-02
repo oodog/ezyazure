@@ -2,6 +2,9 @@
 
 An Azure drag-and-drop environment builder, discovery engine, data-path visualizer, and safe IaC deployment tool.
 
+For a short, non-technical introduction, see the
+[EasyAzure day-to-day presentation](docs/easyazure-presentation.md).
+
 ## What it does
 
 - **Discover** existing Azure environments across one or many subscriptions
@@ -117,16 +120,42 @@ npm install
 npm run dev
 ```
 
-### Deploy the tool infrastructure to Azure
+### Deploy EasyAzure to your subscription
+
+The deployment creates a customer-owned Microsoft Entra application, Azure Container Apps API,
+Azure Static Web Apps frontend, ACR, managed identity, storage, Key Vault, and monitoring resources.
+It previews the infrastructure changes before creating anything, builds both applications from
+source, assigns the deploying user the EasyAzure `Admin` role, and verifies both endpoints.
+
+Prerequisites:
+
+- Azure CLI, Azure Developer CLI (`azd`) 1.20+, Node.js 20+, and npm
+- Azure `Owner`, or `Contributor` plus `User Access Administrator`, on the target subscription
+- Microsoft Entra `Cloud Application Administrator` (or equivalent permissions to create an app,
+        service principal, app roles, and assign yourself to the enterprise application)
+
+Windows PowerShell:
 
 ```powershell
-cd infra
-az login
-az deployment sub create \
-  --name easyazure-infra \
-  --location australiaeast \
-  --template-file main.bicep \
-  --parameters main.bicepparam
+./scripts/deployment/deploy.ps1
+```
+
+macOS/Linux:
+
+```bash
+./scripts/deployment/deploy.sh
+```
+
+The scripts initialize and prompt for the target environment, subscription, and location on first
+use before configuring Entra. Subsequent deployments can use `azd up` directly. Azure OpenAI is optional; deterministic discovery, routing,
+Designer validation, export, and IaC generation work without it. See
+[Customer-owned deployment](docs/self-hosting.md) for permissions, optional AI configuration,
+additional discovery subscriptions, costs, validation, and removal.
+
+To remove the Azure resources after testing:
+
+```bash
+azd down --purge
 ```
 
 ## Security model

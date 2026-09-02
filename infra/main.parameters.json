@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "tenantId": {
+      "value": "${AZURE_TENANT_ID}"
+    },
+    "apiClientId": {
+      "value": "${EASYAZURE_CLIENT_ID}"
+    },
+    "adminObjectId": {
+      "value": "${EASYAZURE_ADMIN_OBJECT_ID}"
+    },
+    "adminPrincipalType": {
+      "value": "${EASYAZURE_ADMIN_PRINCIPAL_TYPE}"
+    },
+    "azureOpenAIEndpoint": {
+      "value": "${AZURE_OPENAI_ENDPOINT}"
+    },
+    "azureOpenAIResourceId": {
+      "value": "${AZURE_OPENAI_RESOURCE_ID}"
+    },
+    "azureOpenAIDeploymentName": {
+      "value": "${AZURE_OPENAI_DEPLOYMENT_NAME}"
+    },
+    "discoveryReaderRoleAssignmentName": {
+      "value": "${EASYAZURE_DISCOVERY_READER_ROLE_ASSIGNMENT_NAME}"
+    },
+    "storageBlobRoleAssignmentName": {
+      "value": "${EASYAZURE_STORAGE_BLOB_ROLE_ASSIGNMENT_NAME}"
+    },
+    "openAIUserRoleAssignmentName": {
+      "value": "${EASYAZURE_OPENAI_USER_ROLE_ASSIGNMENT_NAME}"
+    }
+  }
+}

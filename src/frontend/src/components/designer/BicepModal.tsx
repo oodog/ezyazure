@@ -3,9 +3,20 @@ import { useState } from 'react'
 interface BicepModalProps {
   bicep: string
   onClose: () => void
+  additionsOnly?: boolean
+  createdResources?: number
+  existingReferences?: number
+  requiredDeploymentScope?: { subscriptionId: string; resourceGroup: string }
 }
 
-export default function BicepModal({ bicep, onClose }: BicepModalProps) {
+export default function BicepModal({
+  bicep,
+  onClose,
+  additionsOnly = false,
+  createdResources = 0,
+  existingReferences = 0,
+  requiredDeploymentScope,
+}: BicepModalProps) {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -37,8 +48,17 @@ export default function BicepModal({ bicep, onClose }: BicepModalProps) {
               </svg>
             </div>
             <div>
-              <h2 className="text-sm font-bold text-gray-900">Generated Bicep</h2>
-              <p className="text-[10px] text-gray-400">main.bicep — review and deploy with <code className="bg-gray-100 px-1 rounded">az deployment group create</code></p>
+              <h2 className="text-sm font-bold text-gray-900">{additionsOnly ? 'Additions-only Bicep' : 'Generated Bicep'}</h2>
+              <p className="text-[10px] text-gray-400">
+                {additionsOnly
+                  ? `${createdResources} new resource(s); ${existingReferences} discovered reference(s). Run what-if before deployment.`
+                  : <>main.bicep — review and deploy with <code className="bg-gray-100 px-1 rounded">az deployment group create</code></>}
+              </p>
+              {additionsOnly && requiredDeploymentScope && (
+                <p className="mt-0.5 text-[10px] text-blue-700">
+                  Target: {requiredDeploymentScope.subscriptionId} / {requiredDeploymentScope.resourceGroup}
+                </p>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">

@@ -79,6 +79,7 @@ jobs:
           path: dist
 
       - name: Deploy to Azure Static Web Apps (staging)
+        id: swa-deploy
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.SWA_STAGING_TOKEN }}
@@ -88,7 +89,10 @@ jobs:
           skip_app_build: true
 
       - name: Verify frontend deployment
+        env:
+          SWA_URL: ${{ steps.swa-deploy.outputs.static_web_app_url }}
         run: |
+          test -n "$SWA_URL"
           curl --fail --silent --show-error \
             --retry 12 --retry-delay 10 --retry-all-errors \
-            https://salmon-sky-0fe4ee500.7.azurestaticapps.net/
+            "$SWA_URL"

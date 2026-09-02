@@ -1,0 +1,15 @@
+{
+  "$schema": "product-skill.schema.json",
+  "id": "monitoring",
+  "version": "1.0.0",
+  "name": "Monitoring",
+  "instructions": "Analyze Azure Monitor, Log Analytics, diagnostic settings, alerts, retention and evidence needed for incident diagnosis.",
+  "reference": "https://learn.microsoft.com/azure/azure-monitor/fundamentals/overview",
+  "intentKeywords": ["monitor", "log analytics", "diagnostic", "alert", "metric", "application insights"],
+  "resourceTypes": [],
+  "resourceTypePrefixes": [
+    "microsoft.insights/",
+    "microsoft.operationalinsights/",
+    "microsoft.alertsmanagement/"
+  ]
+}

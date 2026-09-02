@@ -1,0 +1,11 @@
+{
+  "$schema": "product-skill.schema.json",
+  "id": "web-apps",
+  "version": "1.0.0",
+  "name": "Web & app services",
+  "instructions": "Analyze App Service, Functions and API Management ingress, VNet integration, Private Endpoints, TLS, identity and health behavior.",
+  "reference": "https://learn.microsoft.com/azure/app-service/overview",
+  "intentKeywords": ["app service", "function", "web app", "api management", "apim"],
+  "resourceTypes": [],
+  "resourceTypePrefixes": ["microsoft.web/", "microsoft.apimanagement/"]
+}

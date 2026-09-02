@@ -2,6 +2,7 @@ using EasyAzure.Core.Interfaces;
 using EasyAzure.Core.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace EasyAzure.Api.Controllers;
 
@@ -13,17 +14,20 @@ public class DiscoveryController : ControllerBase
     private readonly IDiscoveryService _discovery;
     private readonly IRoutingAnalysisService _routing;
     private readonly IDataPathService _dataPath;
+    private readonly IDiscoveryAssistantService _assistant;
     private readonly ILogger<DiscoveryController> _logger;
 
     public DiscoveryController(
         IDiscoveryService discovery,
         IRoutingAnalysisService routing,
         IDataPathService dataPath,
+        IDiscoveryAssistantService assistant,
         ILogger<DiscoveryController> logger)
     {
         _discovery = discovery;
         _routing = routing;
         _dataPath = dataPath;
+        _assistant = assistant;
         _logger = logger;
     }
 
@@ -129,5 +133,35 @@ public class DiscoveryController : ControllerBase
         var graph = await _discovery.GetTopologyMultiAsync(request.SubscriptionIds, ct);
         var result = await _dataPath.TraceOnGraphAsync(graph, request, ct);
         return Ok(result);
+    }
+
+    /// <summary>
+    /// Answers an advisory support question using the server-rebuilt discovered topology,
+    /// deterministic routing findings, and fixed technology-specific skill instructions.
+    /// </summary>
+    [HttpPost("assistant/chat")]
+    [EnableRateLimiting("assistant")]
+    public async Task<ActionResult<DiscoveryAssistantResponse>> AssistantChat(
+        [FromBody] DiscoveryAssistantRequest request, CancellationToken ct)
+    {
+        if (request?.SubscriptionIds is null || request.SubscriptionIds.Count == 0 || request.SubscriptionIds.Count > 20)
+            return BadRequest(new { error = "Provide between 1 and 20 subscriptionIds." });
+        if (request.SubscriptionIds.Any(subscriptionId => !Guid.TryParse(subscriptionId, out _)))
+            return BadRequest(new { error = "Every subscriptionId must be a valid GUID." });
+        if (string.IsNullOrWhiteSpace(request.Message) || request.Message.Length > 2_000)
+            return BadRequest(new { error = "Message is required and must be 2,000 characters or fewer." });
+        if (request.History is null || request.FocusTechnologies is null ||
+            request.History.Count > 6 ||
+            request.History.Any(turn => turn is null || turn.Role is not ("user" or "assistant") ||
+                turn.Content is null || turn.Content.Length > 2_000))
+            return BadRequest(new { error = "Conversation history exceeds the supported limit." });
+        if (request.FocusTechnologies.Count > 11 || request.FocusTechnologies.Any(technology => technology.Length > 50) ||
+            request.FocusResourceId?.Length > 2_048)
+            return BadRequest(new { error = "Assistant focus exceeds the supported limit." });
+
+        var graph = await _discovery.GetTopologyMultiAsync(request.SubscriptionIds, ct);
+        var routingReport = await _routing.AnalyzeAsync(graph, useAi: false, ct);
+        var response = await _assistant.ChatAsync(request, graph, routingReport, ct);
+        return Ok(response);
     }
 }

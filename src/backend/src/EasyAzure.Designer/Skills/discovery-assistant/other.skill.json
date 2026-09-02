@@ -1,0 +1,11 @@
+{
+  "$schema": "product-skill.schema.json",
+  "id": "other",
+  "version": "1.0.0",
+  "name": "Azure architecture",
+  "instructions": "Apply Azure Well-Architected guidance and clearly identify which technology-specific evidence is missing.",
+  "reference": "https://learn.microsoft.com/azure/well-architected/",
+  "intentKeywords": [],
+  "resourceTypes": [],
+  "resourceTypePrefixes": []
+}

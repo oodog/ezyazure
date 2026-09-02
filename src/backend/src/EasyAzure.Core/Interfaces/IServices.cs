@@ -68,6 +68,19 @@ public interface IRoutingAnalysisService
     Task<RoutingAnalysisReport> AnalyzeAsync(TopologyGraph graph, bool useAi, CancellationToken ct = default);
 }
 
+public interface IDiscoveryAssistantService
+{
+    /// <summary>
+    /// Answers a support question using a server-rebuilt discovery graph, deterministic routing
+    /// findings, and fixed technology-specific skill instructions. The service is advisory only.
+    /// </summary>
+    Task<DiscoveryAssistantResponse> ChatAsync(
+        DiscoveryAssistantRequest request,
+        TopologyGraph graph,
+        RoutingAnalysisReport routingReport,
+        CancellationToken ct = default);
+}
+
 /// <summary>
 /// Persists and compares discovery snapshots (versioning). Snapshots are stored in blob
 /// storage so customers can review how their environment changed between discoveries.

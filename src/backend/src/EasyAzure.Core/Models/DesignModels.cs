@@ -81,6 +81,7 @@ public record DesignImportNode
     public string? ParentId { get; init; }
     public double Confidence { get; init; }
     public string Evidence { get; init; } = string.Empty;
+    public Dictionary<string, object> Properties { get; init; } = [];
 }
 
 public record DesignImportEdge

@@ -6,6 +6,7 @@ using EasyAzure.Designer.Services;
 using EasyAzure.IaC.Services;
 using Microsoft.Identity.Web;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,6 +36,9 @@ builder.Services.AddScoped<IDesignerService, DesignerService>();
 builder.Services.AddScoped<IDesignImportService, DesignImportService>();
 builder.Services.AddScoped<IBestPracticeEngine, BestPracticeEngine>();
 builder.Services.AddScoped<IRoutingAnalysisService, RoutingAnalysisService>();
+builder.Services.AddSingleton<IProductSkillProvider, JsonProductSkillProvider>();
+builder.Services.AddSingleton<ProductSkillRegistry>();
+builder.Services.AddScoped<IDiscoveryAssistantService, DiscoveryAssistantService>();
 builder.Services.AddScoped<IBicepGeneratorService, BicepGeneratorService>();
 builder.Services.AddScoped<IDeploymentService, DeploymentService>();
 builder.Services.AddScoped<IReplicationService, ReplicationService>();
@@ -62,6 +66,24 @@ builder.Services.AddSwaggerGen(c =>
 
 builder.Services.AddApplicationInsightsTelemetry();
 
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("assistant", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirst("oid")?.Value
+                ?? context.User.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value
+                ?? context.Connection.RemoteIpAddress?.ToString()
+                ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 12,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true,
+            }));
+});
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Frontend", policy =>
@@ -73,6 +95,9 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+// Load once at startup so an invalid or incomplete skill bundle cannot receive traffic.
+_ = app.Services.GetRequiredService<ProductSkillRegistry>();
 
 if (app.Environment.IsDevelopment())
 {
@@ -89,6 +114,7 @@ app.UseStatusCodePages();
 app.UseHttpsRedirection();
 app.UseCors("Frontend");
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
 app.MapGet("/health", () => Results.Ok(new
 {

@@ -2,6 +2,8 @@ param name string
 param location string
 param tenantId string
 param adminObjectId string
+@allowed(['User', 'Group', 'ServicePrincipal'])
+param adminPrincipalType string
 param tags object = {}
 
 resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
@@ -37,7 +39,7 @@ resource adminRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01
       '00482a5a-887f-4fb3-b363-3b7fe8e74483' // Key Vault Administrator
     )
     principalId: adminObjectId
-    principalType: 'User'
+    principalType: adminPrincipalType
   }
 }
 

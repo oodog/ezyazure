@@ -8,9 +8,9 @@ const proposal: DesignImportProposal = {
   model: 'gpt-4o-mini',
   warnings: [],
   nodes: [
-    { id: 'vnet', blockType: 'VNet', label: 'Hub', x: 100, y: 100, confidence: 0.95, evidence: 'label' },
-    { id: 'subnet', blockType: 'Subnet', label: 'Workload', x: 150, y: 170, parentId: 'vnet', confidence: 0.9, evidence: 'inside hub' },
-    { id: 'nsg', blockType: 'NSG', label: 'Workload NSG', x: 500, y: 170, confidence: 0.8, evidence: 'shield icon' },
+    { id: 'vnet', blockType: 'VNet', label: 'Hub', x: 100, y: 100, confidence: 0.95, evidence: 'label', properties: { addressSpace: ['10.20.0.0/16'] } },
+    { id: 'subnet', blockType: 'Subnet', label: 'Workload', x: 150, y: 170, parentId: 'vnet', confidence: 0.9, evidence: 'inside hub', properties: { addressPrefix: '10.20.1.0/24' } },
+    { id: 'nsg', blockType: 'NSG', label: 'Workload NSG', x: 500, y: 170, confidence: 0.8, evidence: 'shield icon', properties: {} },
   ],
   edges: [
     { id: 'protects', source: 'nsg', target: 'subnet', relationship: 'protects', confidence: 0.8, evidence: 'line' },
@@ -33,6 +33,7 @@ describe('applyDesignImport', () => {
     const subnet = result.nodes.find((node) => node.data.blockType === 'Subnet')
     expect(subnet?.parentId).toBe('import-test-vnet')
     expect(subnet?.position).toEqual({ x: 50, y: 70 })
+    expect(subnet?.data.properties.addressPrefix).toBe('10.20.1.0/24')
     expect(result.edges).toHaveLength(1)
     expect(result.edges[0].label).toBe('protects')
     expect(result.warnings).toContainEqual(expect.stringContaining('Subnet has no defined outgoing connections'))

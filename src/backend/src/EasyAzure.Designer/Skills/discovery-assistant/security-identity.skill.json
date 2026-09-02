@@ -1,0 +1,16 @@
+{
+  "$schema": "product-skill.schema.json",
+  "id": "security-identity",
+  "version": "1.0.0",
+  "name": "Security & identity",
+  "instructions": "Analyze RBAC scope, managed identities, Key Vault, Defender and policy. Apply least privilege and never request or expose credentials.",
+  "reference": "https://learn.microsoft.com/azure/security/fundamentals/overview",
+  "intentKeywords": ["identity", "rbac", "role", "key vault", "defender", "policy", "permission", "security"],
+  "resourceTypes": [],
+  "resourceTypePrefixes": [
+    "microsoft.keyvault/",
+    "microsoft.managedidentity/",
+    "microsoft.authorization/",
+    "microsoft.security/"
+  ]
+}

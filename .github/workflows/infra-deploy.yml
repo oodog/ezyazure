@@ -35,14 +35,67 @@ jobs:
       - name: Lint Bicep
         run: az bicep lint --file infra/main.bicep
 
+      - name: Resolve staging deployment values
+        env:
+          EASYAZURE_CLIENT_ID: ${{ vars.VITE_AZURE_CLIENT_ID }}
+          AZURE_ENV_NAME: ${{ github.event.inputs.environment || 'staging' }}
+          AZURE_RG: ${{ secrets.AZURE_RG_STAGING }}
+          ACR_NAME: ${{ secrets.ACR_NAME }}
+        run: |
+          test -n "$EASYAZURE_CLIENT_ID"
+          ADMIN_OBJECT_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id --output tsv)
+          OPENAI_RESOURCE_ID=$(az cognitiveservices account list \
+            --resource-group "${{ secrets.AZURE_RG_STAGING }}" \
+            --query "[?kind=='OpenAI'] | [0].id" --output tsv 2>/dev/null || true)
+          OPENAI_ENDPOINT=$(az cognitiveservices account list \
+            --resource-group "${{ secrets.AZURE_RG_STAGING }}" \
+            --query "[?kind=='OpenAI'] | [0].properties.endpoint" --output tsv 2>/dev/null || true)
+          API_PRINCIPAL_ID=$(az identity show \
+            --name "id-ca-easyazure-${AZURE_ENV_NAME}-api" \
+            --resource-group "$AZURE_RG" \
+            --query principalId --output tsv 2>/dev/null || true)
+          if [ -n "$API_PRINCIPAL_ID" ]; then
+            DISCOVERY_READER_ASSIGNMENT_NAME=$(az role assignment list --all \
+              --assignee-object-id "$API_PRINCIPAL_ID" \
+              --scope "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+              --query "[?roleDefinitionName=='Reader' && scope=='/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}'] | [0].name" \
+              --output tsv)
+            STORAGE_BLOB_ASSIGNMENT_NAME=$(az role assignment list --all \
+              --assignee-object-id "$API_PRINCIPAL_ID" \
+              --scope "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RG}/providers/Microsoft.Storage/storageAccounts/steasyazurestaging001" \
+              --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | [0].name" \
+              --output tsv)
+            OPENAI_USER_ASSIGNMENT_NAME=$(az role assignment list --all \
+              --assignee-object-id "$API_PRINCIPAL_ID" \
+              --scope "$OPENAI_RESOURCE_ID" \
+              --query "[?roleDefinitionName=='Cognitive Services OpenAI User'] | [0].name" \
+              --output tsv)
+          fi
+          echo "EASYAZURE_ADMIN_OBJECT_ID=$ADMIN_OBJECT_ID" >> "$GITHUB_ENV"
+          echo "AZURE_OPENAI_RESOURCE_ID=$OPENAI_RESOURCE_ID" >> "$GITHUB_ENV"
+          echo "AZURE_OPENAI_ENDPOINT=$OPENAI_ENDPOINT" >> "$GITHUB_ENV"
+          echo "EASYAZURE_DISCOVERY_READER_ROLE_ASSIGNMENT_NAME=${DISCOVERY_READER_ASSIGNMENT_NAME:-}" >> "$GITHUB_ENV"
+          echo "EASYAZURE_STORAGE_BLOB_ROLE_ASSIGNMENT_NAME=${STORAGE_BLOB_ASSIGNMENT_NAME:-}" >> "$GITHUB_ENV"
+          echo "EASYAZURE_OPENAI_USER_ROLE_ASSIGNMENT_NAME=${OPENAI_USER_ASSIGNMENT_NAME:-}" >> "$GITHUB_ENV"
+
       - name: Validate deployment (what-if)
         run: |
           az deployment sub what-if \
             --name easyazure-infra-whatif \
             --location australiaeast \
             --template-file infra/main.bicep \
-            --parameters infra/main.bicepparam \
-            --parameters environmentName=${{ github.event.inputs.environment || 'staging' }}
+            --parameters \
+              environmentName=${{ github.event.inputs.environment || 'staging' }} \
+              tenantId=${{ secrets.AZURE_TENANT_ID }} \
+              apiClientId=${{ vars.VITE_AZURE_CLIENT_ID }} \
+              apiContainerImage=${{ secrets.ACR_NAME }}.azurecr.io/easyazure-api:latest \
+              azureOpenAIEndpoint=$AZURE_OPENAI_ENDPOINT \
+              azureOpenAIResourceId=$AZURE_OPENAI_RESOURCE_ID \
+              adminObjectId=$EASYAZURE_ADMIN_OBJECT_ID \
+              adminPrincipalType=ServicePrincipal \
+              discoveryReaderRoleAssignmentName=$EASYAZURE_DISCOVERY_READER_ROLE_ASSIGNMENT_NAME \
+              storageBlobRoleAssignmentName=$EASYAZURE_STORAGE_BLOB_ROLE_ASSIGNMENT_NAME \
+              openAIUserRoleAssignmentName=$EASYAZURE_OPENAI_USER_ROLE_ASSIGNMENT_NAME
 
   deploy:
     needs: validate
@@ -62,14 +115,65 @@ jobs:
       - name: Install Bicep
         run: az bicep install
 
+      - name: Resolve staging deployment values
+        env:
+          AZURE_ENV_NAME: ${{ github.event.inputs.environment || 'staging' }}
+          AZURE_RG: ${{ secrets.AZURE_RG_STAGING }}
+          ACR_NAME: ${{ secrets.ACR_NAME }}
+        run: |
+          ADMIN_OBJECT_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id --output tsv)
+          OPENAI_RESOURCE_ID=$(az cognitiveservices account list \
+            --resource-group "${{ secrets.AZURE_RG_STAGING }}" \
+            --query "[?kind=='OpenAI'] | [0].id" --output tsv 2>/dev/null || true)
+          OPENAI_ENDPOINT=$(az cognitiveservices account list \
+            --resource-group "${{ secrets.AZURE_RG_STAGING }}" \
+            --query "[?kind=='OpenAI'] | [0].properties.endpoint" --output tsv 2>/dev/null || true)
+          API_PRINCIPAL_ID=$(az identity show \
+            --name "id-ca-easyazure-${AZURE_ENV_NAME}-api" \
+            --resource-group "$AZURE_RG" \
+            --query principalId --output tsv 2>/dev/null || true)
+          if [ -n "$API_PRINCIPAL_ID" ]; then
+            DISCOVERY_READER_ASSIGNMENT_NAME=$(az role assignment list --all \
+              --assignee-object-id "$API_PRINCIPAL_ID" \
+              --scope "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+              --query "[?roleDefinitionName=='Reader' && scope=='/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}'] | [0].name" \
+              --output tsv)
+            STORAGE_BLOB_ASSIGNMENT_NAME=$(az role assignment list --all \
+              --assignee-object-id "$API_PRINCIPAL_ID" \
+              --scope "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RG}/providers/Microsoft.Storage/storageAccounts/steasyazurestaging001" \
+              --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | [0].name" \
+              --output tsv)
+            OPENAI_USER_ASSIGNMENT_NAME=$(az role assignment list --all \
+              --assignee-object-id "$API_PRINCIPAL_ID" \
+              --scope "$OPENAI_RESOURCE_ID" \
+              --query "[?roleDefinitionName=='Cognitive Services OpenAI User'] | [0].name" \
+              --output tsv)
+          fi
+          echo "EASYAZURE_ADMIN_OBJECT_ID=$ADMIN_OBJECT_ID" >> "$GITHUB_ENV"
+          echo "AZURE_OPENAI_RESOURCE_ID=$OPENAI_RESOURCE_ID" >> "$GITHUB_ENV"
+          echo "AZURE_OPENAI_ENDPOINT=$OPENAI_ENDPOINT" >> "$GITHUB_ENV"
+          echo "EASYAZURE_DISCOVERY_READER_ROLE_ASSIGNMENT_NAME=${DISCOVERY_READER_ASSIGNMENT_NAME:-}" >> "$GITHUB_ENV"
+          echo "EASYAZURE_STORAGE_BLOB_ROLE_ASSIGNMENT_NAME=${STORAGE_BLOB_ASSIGNMENT_NAME:-}" >> "$GITHUB_ENV"
+          echo "EASYAZURE_OPENAI_USER_ROLE_ASSIGNMENT_NAME=${OPENAI_USER_ASSIGNMENT_NAME:-}" >> "$GITHUB_ENV"
+
       - name: Deploy infrastructure
         run: |
           az deployment sub create \
             --name easyazure-infra-${{ github.run_number }} \
             --location australiaeast \
             --template-file infra/main.bicep \
-            --parameters infra/main.bicepparam \
-            --parameters environmentName=${{ github.event.inputs.environment || 'staging' }}
+            --parameters \
+              environmentName=${{ github.event.inputs.environment || 'staging' }} \
+              tenantId=${{ secrets.AZURE_TENANT_ID }} \
+              apiClientId=${{ vars.VITE_AZURE_CLIENT_ID }} \
+              apiContainerImage=${{ secrets.ACR_NAME }}.azurecr.io/easyazure-api:latest \
+              azureOpenAIEndpoint=$AZURE_OPENAI_ENDPOINT \
+              azureOpenAIResourceId=$AZURE_OPENAI_RESOURCE_ID \
+              adminObjectId=$EASYAZURE_ADMIN_OBJECT_ID \
+              adminPrincipalType=ServicePrincipal \
+              discoveryReaderRoleAssignmentName=$EASYAZURE_DISCOVERY_READER_ROLE_ASSIGNMENT_NAME \
+              storageBlobRoleAssignmentName=$EASYAZURE_STORAGE_BLOB_ROLE_ASSIGNMENT_NAME \
+              openAIUserRoleAssignmentName=$EASYAZURE_OPENAI_USER_ROLE_ASSIGNMENT_NAME
 
       - name: Verify API health
         run: |

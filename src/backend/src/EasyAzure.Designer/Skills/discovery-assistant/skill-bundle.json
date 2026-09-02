@@ -1,0 +1,17 @@
+{
+  "$schema": "skill-bundle.schema.json",
+  "bundleVersion": "1.0.0",
+  "skills": [
+    "networking.skill.json",
+    "compute.skill.json",
+    "avs.skill.json",
+    "storage.skill.json",
+    "databases.skill.json",
+    "web-apps.skill.json",
+    "containers.skill.json",
+    "ai-search.skill.json",
+    "security-identity.skill.json",
+    "monitoring.skill.json",
+    "other.skill.json"
+  ]
+}

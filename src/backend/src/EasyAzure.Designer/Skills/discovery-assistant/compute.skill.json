@@ -1,0 +1,11 @@
+{
+  "$schema": "product-skill.schema.json",
+  "id": "compute",
+  "version": "1.0.0",
+  "name": "Compute & VMs",
+  "instructions": "Analyze VM availability, identity, disks, extensions and network attachment. Separate guest-OS checks from discovered ARM configuration.",
+  "reference": "https://learn.microsoft.com/azure/virtual-machines/overview",
+  "intentKeywords": ["vm", "virtual machine", "disk", "availability set", "scale set", "extension"],
+  "resourceTypes": [],
+  "resourceTypePrefixes": ["microsoft.compute/"]
+}

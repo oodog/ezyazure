@@ -1,0 +1,16 @@
+{
+  "$schema": "product-skill.schema.json",
+  "id": "databases",
+  "version": "1.0.0",
+  "name": "Databases",
+  "instructions": "Analyze private connectivity, DNS, identity authentication, high availability, backup and failover for Azure database services.",
+  "reference": "https://learn.microsoft.com/azure/architecture/data-guide/",
+  "intentKeywords": ["sql", "database", "postgres", "mysql", "cosmos", "redis", "cache"],
+  "resourceTypes": [],
+  "resourceTypePrefixes": [
+    "microsoft.sql/",
+    "microsoft.documentdb/",
+    "microsoft.dbfor",
+    "microsoft.cache/"
+  ]
+}

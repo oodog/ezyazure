@@ -3,8 +3,9 @@ targetScope = 'subscription'
 metadata name = 'EasyAzure Platform Infrastructure'
 metadata description = 'Deploys the EasyAzure management tool into a dedicated tooling subscription.'
 
-@description('Short name for the environment (staging, production).')
-@allowed(['staging', 'production'])
+@description('Short azd environment name used for resource names and tags.')
+@minLength(2)
+@maxLength(24)
 param environmentName string = 'staging'
 
 @description('Primary Azure region for all resources.')
@@ -16,11 +17,14 @@ param tenantId string
 @description('Microsoft Entra application client ID used by the EasyAzure SPA and API.')
 param apiClientId string
 
-@description('Fully qualified EasyAzure API container image, including an immutable tag or approved channel tag.')
-param apiContainerImage string
+@description('Initial API image. azd replaces the default bootstrap image with a source-built ACR image during deploy.')
+param apiContainerImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
-@description('Azure OpenAI endpoint used for AI validation and multimodal design import.')
-param azureOpenAIEndpoint string
+@description('Azure OpenAI endpoint used for optional AI validation and multimodal design import. Leave empty to deploy deterministic features only.')
+param azureOpenAIEndpoint string = ''
+
+@description('Optional full resource ID of the existing Azure OpenAI account. When set, the API identity receives Cognitive Services OpenAI User.')
+param azureOpenAIResourceId string = ''
 
 @description('Vision-capable Azure OpenAI deployment used for design analysis.')
 param azureOpenAIDeploymentName string = 'gpt-4o-mini'
@@ -28,23 +32,72 @@ param azureOpenAIDeploymentName string = 'gpt-4o-mini'
 @description('Azure OpenAI inference API version.')
 param azureOpenAIApiVersion string = '2024-10-21'
 
+@description('Storage public network access. Existing staging remains private; new self-hosted environments default to public access with Entra authentication.')
+@allowed(['Enabled', 'Disabled'])
+param storagePublicNetworkAccess string = environmentName == 'staging' ? 'Disabled' : 'Enabled'
+
+@description('Storage firewall default action. Existing staging remains deny-by-default.')
+@allowed(['Allow', 'Deny'])
+param storageNetworkDefaultAction string = environmentName == 'staging' ? 'Deny' : 'Allow'
+
+@description('Static Web App SKU. Existing staging uses Standard; new self-hosted environments default to Free.')
+@allowed(['Free', 'Standard'])
+param staticWebAppSkuName string = environmentName == 'staging' ? 'Standard' : 'Free'
+
+@description('Optional GitHub repository already linked to the Static Web App.')
+param staticWebAppRepositoryUrl string = environmentName == 'staging' ? 'https://github.com/oodog/ezyazure' : ''
+
+@description('Branch associated with the linked Static Web App repository.')
+param staticWebAppRepositoryBranch string = 'main'
+
+@description('Cost-center tag applied to deployed resources.')
+param costCenter string = 'platform'
+
+@description('Optional existing subscription Reader role-assignment resource name to adopt.')
+param discoveryReaderRoleAssignmentName string = ''
+
+@description('Optional existing Storage Blob Data Contributor role-assignment resource name to adopt.')
+param storageBlobRoleAssignmentName string = ''
+
+@description('Optional existing Cognitive Services OpenAI User role-assignment resource name to adopt.')
+param openAIUserRoleAssignmentName string = ''
+
 @description('Object ID of the admin user or group for initial Key Vault access policy.')
 param adminObjectId string
+
+@description('Microsoft Entra principal type for the initial Key Vault administrator.')
+@allowed(['User', 'Group', 'ServicePrincipal'])
+param adminPrincipalType string = 'User'
 
 @description('Tags applied to all resources.')
 param tags object = {
   product: 'easyazure'
   environment: environmentName
   managedBy: 'bicep'
+  costCenter: costCenter
 }
 
-var prefix = 'easyazure-${environmentName}'
+var resourceToken = uniqueString(subscription().id, environmentName)
+var safeEnvironmentName = take(toLower(environmentName), 16)
+var prefix = 'easyazure-${safeEnvironmentName}'
 var rgName = 'rg-${prefix}'
+var apiIdentityName = 'id-ca-${prefix}-api'
+var isExistingStaging = environmentName == 'staging'
+var keyVaultName = isExistingStaging ? 'kv-easyazure-staging' : 'kv-ezy-${resourceToken}'
+var storageAccountName = isExistingStaging ? 'steasyazurestaging001' : 'stezy${resourceToken}'
+var containerRegistryName = isExistingStaging ? 'creasyazurestaging001' : 'crezy${resourceToken}'
+var azureOpenAIResourceIdParts = split(azureOpenAIResourceId, '/')
+var azureOpenAISubscriptionId = empty(azureOpenAIResourceId) ? subscription().subscriptionId : azureOpenAIResourceIdParts[2]
+var azureOpenAIResourceGroupName = empty(azureOpenAIResourceId) ? rgName : azureOpenAIResourceIdParts[4]
+var azureOpenAIAccountName = empty(azureOpenAIResourceId) ? '' : azureOpenAIResourceIdParts[8]
+var baseTags = union(tags, {
+  'azd-env-name': environmentName
+})
 
 resource rg 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: rgName
   location: location
-  tags: tags
+  tags: baseTags
 }
 
 module logAnalytics 'modules/log-analytics.bicep' = {
@@ -53,7 +106,7 @@ module logAnalytics 'modules/log-analytics.bicep' = {
   params: {
     name: 'log-${prefix}'
     location: location
-    tags: tags
+    tags: baseTags
   }
 }
 
@@ -64,7 +117,7 @@ module appInsights 'modules/app-insights.bicep' = {
     name: 'appi-${prefix}'
     location: location
     logAnalyticsWorkspaceId: logAnalytics.outputs.id
-    tags: tags
+    tags: baseTags
   }
 }
 
@@ -72,11 +125,12 @@ module keyVault 'modules/key-vault.bicep' = {
   name: 'key-vault'
   scope: rg
   params: {
-    name: 'kv-${prefix}'
+    name: keyVaultName
     location: location
     tenantId: tenantId
     adminObjectId: adminObjectId
-    tags: tags
+    adminPrincipalType: adminPrincipalType
+    tags: baseTags
   }
 }
 
@@ -84,9 +138,11 @@ module storage 'modules/storage.bicep' = {
   name: 'storage'
   scope: rg
   params: {
-    name: 'st${replace(prefix, '-', '')}001'
+    name: storageAccountName
     location: location
-    tags: tags
+    publicNetworkAccess: storagePublicNetworkAccess
+    networkDefaultAction: storageNetworkDefaultAction
+    tags: baseTags
   }
 }
 
@@ -94,9 +150,9 @@ module containerRegistry 'modules/container-registry.bicep' = {
   name: 'container-registry'
   scope: rg
   params: {
-    name: 'cr${replace(prefix, '-', '')}001'
+    name: containerRegistryName
     location: location
-    tags: tags
+    tags: baseTags
   }
 }
 
@@ -107,7 +163,7 @@ module containerAppsEnv 'modules/container-apps-environment.bicep' = {
     name: 'cae-${prefix}'
     location: location
     logAnalyticsWorkspaceId: logAnalytics.outputs.id
-    tags: tags
+    tags: baseTags
   }
 }
 
@@ -116,9 +172,9 @@ module apiIdentity 'modules/managed-identity.bicep' = {
   name: 'api-managed-identity'
   scope: rg
   params: {
-    name: 'id-ca-${prefix}-api'
+    name: apiIdentityName
     location: location
-    tags: tags
+    tags: baseTags
   }
 }
 
@@ -129,6 +185,44 @@ module acrPull 'modules/acr-pull-assignment.bicep' = {
   params: {
     registryName: containerRegistry.outputs.name
     principalId: apiIdentity.outputs.principalId
+  }
+}
+
+// Discovery uses Azure Resource Graph and ARM reads across the selected subscription.
+// Reader is sufficient; mutation is performed separately with the signed-in user's token.
+resource discoveryReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: empty(discoveryReaderRoleAssignmentName)
+    ? guid(subscription().id, apiIdentityName, 'EasyAzure discovery Reader')
+    : discoveryReaderRoleAssignmentName
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      'acdd72a7-3385-48ef-bd42-f606fba81ae7' // Reader
+    )
+    principalId: apiIdentity.outputs.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+module snapshotStorageAccess 'modules/storage-blob-role-assignment.bicep' = {
+  name: 'snapshot-storage-access'
+  scope: rg
+  params: {
+    storageAccountName: storage.outputs.name
+    principalId: apiIdentity.outputs.principalId
+    principalName: apiIdentityName
+    roleAssignmentName: storageBlobRoleAssignmentName
+  }
+}
+
+module azureOpenAIAccess 'modules/openai-role-assignment.bicep' = if (!empty(azureOpenAIResourceId)) {
+  name: 'azure-openai-access'
+  scope: resourceGroup(azureOpenAISubscriptionId, azureOpenAIResourceGroupName)
+  params: {
+    accountName: azureOpenAIAccountName
+    principalId: apiIdentity.outputs.principalId
+    principalName: apiIdentityName
+    roleAssignmentName: openAIUserRoleAssignmentName
   }
 }
 
@@ -153,7 +247,9 @@ module apiApp 'modules/container-apps.bicep' = {
     environmentVariables: [
       { name: 'ASPNETCORE_ENVIRONMENT', value: environmentName == 'production' ? 'Production' : 'Staging' }
       { name: 'ApplicationInsights__ConnectionString', secretRef: 'appinsights-connection-string' }
+      { name: 'AZURE_CLIENT_ID', value: apiIdentity.outputs.clientId }
       { name: 'KeyVaultUri', value: keyVault.outputs.uri }
+      { name: 'Storage__BlobEndpoint', value: storage.outputs.blobEndpoint }
       { name: 'AzureAd__TenantId', value: tenantId }
       { name: 'AzureAd__ClientId', value: apiClientId }
       { name: 'AzureAd__Audience', value: 'api://${apiClientId}' }
@@ -162,7 +258,9 @@ module apiApp 'modules/container-apps.bicep' = {
       { name: 'AzureOpenAI__DeploymentName', value: azureOpenAIDeploymentName }
       { name: 'AzureOpenAI__ApiVersion', value: azureOpenAIApiVersion }
     ]
-    tags: tags
+    tags: union(baseTags, {
+      'azd-service-name': 'api'
+    })
   }
 }
 
@@ -172,12 +270,25 @@ module staticWebApp 'modules/static-web-app.bicep' = {
   params: {
     name: 'swa-${prefix}'
     location: 'eastasia'
-    tags: tags
+    skuName: staticWebAppSkuName
+    repositoryUrl: staticWebAppRepositoryUrl
+    repositoryBranch: staticWebAppRepositoryBranch
+    tags: union(baseTags, {
+      'azd-service-name': 'web'
+    })
   }
 }
 
-output resourceGroupName string = rg.name
-output apiUrl string = apiApp.outputs.fqdn
-output staticWebAppUrl string = staticWebApp.outputs.defaultHostname
-output keyVaultUri string = keyVault.outputs.uri
-output containerRegistryLoginServer string = containerRegistry.outputs.loginServer
+// azd captures Bicep outputs as environment values used by packaging and deployment.
+output AZURE_RESOURCE_GROUP string = rg.name
+output AZURE_CONTAINER_REGISTRY_NAME string = containerRegistry.outputs.name
+output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerRegistry.outputs.loginServer
+output SERVICE_API_NAME string = apiApp.outputs.name
+output SERVICE_API_ENDPOINT_URL string = 'https://${apiApp.outputs.fqdn}'
+output SERVICE_WEB_NAME string = staticWebApp.outputs.name
+output SERVICE_WEB_ENDPOINT_URL string = 'https://${staticWebApp.outputs.defaultHostname}'
+output VITE_API_BASE_URL string = 'https://${apiApp.outputs.fqdn}/api'
+output VITE_AZURE_CLIENT_ID string = apiClientId
+output VITE_AZURE_TENANT_ID string = tenantId
+output EASYAZURE_API_IDENTITY_PRINCIPAL_ID string = apiIdentity.outputs.principalId
+output EASYAZURE_KEY_VAULT_URI string = keyVault.outputs.uri

@@ -35,10 +35,15 @@ public class RoutingAnalysisService : IRoutingAnalysisService
     private const string VNetType = "microsoft.network/virtualnetworks";
     private const string FirewallType = "microsoft.network/azurefirewalls";
     private const string RouteTableType = "microsoft.network/routetables";
+    private const string PrivateEndpointType = "microsoft.network/privateendpoints";
+    private const string HubVnetConnectionType = "microsoft.network/virtualhubs/hubvirtualnetworkconnections";
+    private const string RoutingIntentType = "microsoft.network/virtualhubs/routingintent";
 
     private const string LearnUdr = "https://learn.microsoft.com/azure/virtual-network/virtual-networks-udr-overview";
     private const string LearnAsymmetric = "https://learn.microsoft.com/azure/firewall/firewall-known-issues";
     private const string LearnForcedTunnel = "https://learn.microsoft.com/azure/firewall/forced-tunneling";
+    private const string LearnPrivateEndpointPolicies = "https://learn.microsoft.com/azure/private-link/disable-private-endpoint-network-policy";
+    private const string LearnVwanRoutingIntent = "https://learn.microsoft.com/azure/virtual-wan/how-to-routing-policies#troubleshooting";
 
     public RoutingAnalysisService(
         ILogger<RoutingAnalysisService> logger,
@@ -395,6 +400,158 @@ public class RoutingAnalysisService : IRoutingAnalysisService
             });
         }
 
+        // ── Private Endpoint route symmetry ──
+        // Azure injects an InterfaceEndpoint /32 route for each Private Endpoint. In classic
+        // hub-spoke designs that route can bypass a broader NVA UDR. In secured vWAN, Microsoft
+        // documents a different fix: enable Route Table network policies on the PE subnet;
+        // adding PE /32s to the vWAN Private Traffic prefixes box does not ensure symmetry.
+        var privateEndpoints = nodes.Where(node => TypeIs(node, PrivateEndpointType)).ToList();
+        var peSubnetById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var edge in edges.Where(edge =>
+                     string.Equals(edge.Category, FlowEdgeCategory.AssociatedWith, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (TypeIs(nodeById.GetValueOrDefault(edge.Source), PrivateEndpointType) &&
+                TypeIs(nodeById.GetValueOrDefault(edge.Target), SubnetType))
+            {
+                peSubnetById[edge.Source] = edge.Target;
+            }
+        }
+
+        var hubConnections = nodes.Where(node => TypeIs(node, HubVnetConnectionType))
+            .Select(node => new
+            {
+                Node = node,
+                HubId = ParentResourceId(node.Id, "/hubVirtualNetworkConnections/"),
+                RemoteVnetId = GetNestedReferenceId(node.Data, "remoteVirtualNetwork"),
+            })
+            .Where(connection => connection.HubId is not null && connection.RemoteVnetId is not null)
+            .ToList();
+        var privateRoutingIntents = nodes.Where(node => TypeIs(node, RoutingIntentType))
+            .Select(node => new
+            {
+                Node = node,
+                HubId = ParentResourceId(node.Id, "/routingIntent/"),
+                NextHopId = GetPrivateRoutingIntentNextHop(node.Data),
+            })
+            .Where(intent => intent.HubId is not null && intent.NextHopId is not null)
+            .ToList();
+
+        var emittedClassicPeFindings = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pe in privateEndpoints)
+        {
+            if (!peSubnetById.TryGetValue(pe.Id, out var peSubnetId) ||
+                !nodeById.TryGetValue(peSubnetId, out var peSubnet))
+                continue;
+
+            var peIps = ExtractPrivateIps(pe.Data).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var policyState = GetStringProperty(peSubnet.Data, "privateEndpointNetworkPolicies");
+            var routeTablePoliciesEnabled = PrivateEndpointRoutePoliciesEnabled(policyState);
+            var peVnetId = VNetOf(peSubnetId);
+
+            if (peVnetId is not null)
+            {
+                foreach (var connection in hubConnections.Where(connection =>
+                             string.Equals(connection.RemoteVnetId, peVnetId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var intent = privateRoutingIntents.FirstOrDefault(candidate =>
+                        string.Equals(candidate.HubId, connection.HubId, StringComparison.OrdinalIgnoreCase));
+                    if (intent is null || routeTablePoliciesEnabled || string.IsNullOrWhiteSpace(policyState)) continue;
+
+                    var affected = new List<string> { pe.Id, peSubnetId, connection.Node.Id, intent.Node.Id };
+                    if (nodeById.ContainsKey(intent.NextHopId!)) affected.Add(intent.NextHopId!);
+                    findings.Add(new RoutingFinding
+                    {
+                        Severity = "warning",
+                        Confidence = "confirmed",
+                        RuleId = "RT-PE-VWAN-001",
+                        Title = "Private Endpoint bypasses secured vWAN routing intent",
+                        Message =
+                            $"Private Endpoint \"{NameOf(pe.Id)}\" is in VNet \"{NameOf(peVnetId)}\", which is connected " +
+                            $"to secured Virtual Hub \"{NameOf(connection.HubId!)}\" with private routing intent, but subnet " +
+                            $"\"{NameOf(peSubnetId)}\" has privateEndpointNetworkPolicies set to \"{policyState}\". " +
+                            "Microsoft documents that branch-to-Private-Endpoint traffic can bypass the hub security next hop " +
+                            "and return through it, producing an asymmetric flow.",
+                        Evidence =
+                        [
+                            peIps.Count > 0
+                                ? $"Private Endpoint IP(s): {string.Join(", ", peIps)}."
+                                : "Private Endpoint IP enrichment was unavailable; the subnet policy defect is independent of the assigned IP.",
+                            $"Hub VNet connection: {NameOf(connection.Node.Id)}.",
+                            $"Private routing intent next hop: {NameOf(intent.NextHopId!)}.",
+                            $"Private Endpoint network policy state: {policyState}.",
+                        ],
+                        AffectedNodeIds = affected.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                        Recommendation =
+                            $"Enable Route Table network policies on subnet \"{NameOf(peSubnetId)}\" by setting " +
+                            "privateEndpointNetworkPolicies to RouteTableEnabled (or Enabled when NSG policy is also required). " +
+                            "Do not add the Private Endpoint /32 to the Virtual WAN Private Traffic prefixes box; Microsoft " +
+                            "states that this does not ensure symmetry with private routing policies. Verify the effective routes " +
+                            "on the routing-intent NVA or Azure Firewall after the change.",
+                        Reference = LearnVwanRoutingIntent,
+                        Source = "rule",
+                    });
+                }
+            }
+
+            if (peIps.Count == 0) continue;
+            var peVnetPrefixes = peVnetId is not null && nodeById.TryGetValue(peVnetId, out var peVnet)
+                ? GetVNetAddressPrefixes(peVnet.Data).ToList()
+                : [];
+            foreach (var (sourceSubnetId, routes) in nvaRoutesBySubnet)
+            {
+                foreach (var peIp in peIps)
+                {
+                    var peVnetPrefixLength = MostSpecificContainingPrefixLength(peVnetPrefixes, [peIp]);
+                    foreach (var broadRoute in routes.Where(route => CidrContainsIp(route.Prefix, peIp)))
+                    {
+                        var broadPrefixLength = PrefixLength(broadRoute.Prefix);
+                        if (broadPrefixLength is null || peVnetPrefixLength is null ||
+                            broadPrefixLength >= peVnetPrefixLength)
+                            continue;
+
+                        var hasOverride = routes.Any(route =>
+                            string.Equals(route.Ip, broadRoute.Ip, StringComparison.OrdinalIgnoreCase) &&
+                            CidrContainsIp(route.Prefix, peIp) &&
+                            PrefixLength(route.Prefix) >= peVnetPrefixLength);
+                        var findingKey = $"{pe.Id}|{peIp}|{sourceSubnetId}|{broadRoute.Ip}";
+                        if (hasOverride || !emittedClassicPeFindings.Add(findingKey)) continue;
+
+                        var policyEvidence = string.IsNullOrWhiteSpace(policyState)
+                            ? "Private Endpoint network policy state was unavailable."
+                            : $"Private Endpoint network policy state: {policyState}.";
+                        findings.Add(new RoutingFinding
+                        {
+                            Severity = "warning",
+                            Confidence = "potential",
+                            RuleId = "RT-PE-UDR-001",
+                            Title = "Private Endpoint route can bypass the NVA",
+                            Message =
+                                $"Subnet \"{NameOf(sourceSubnetId)}\" uses route {broadRoute.Prefix} to NVA " +
+                                $"{broadRoute.Ip}, but Private Endpoint \"{NameOf(pe.Id)}\" has IP {peIp}. The injected " +
+                                "InterfaceEndpoint /32 route can win over the broader UDR, so one direction can bypass the " +
+                                "stateful NVA. Effective routes are required to confirm the selected path.",
+                            Evidence =
+                            [
+                                $"Private Endpoint IP: {peIp}.",
+                                $"Broad NVA UDR: {broadRoute.Prefix} → {broadRoute.Ip} ({broadRoute.Name}).",
+                                $"No UDR through the same NVA was found with prefix length /{peVnetPrefixLength} or more specific.",
+                                policyEvidence,
+                            ],
+                            AffectedNodeIds = [pe.Id, peSubnetId, sourceSubnetId],
+                            Recommendation =
+                                $"Enable Route Table network policy for Private Endpoints on subnet \"{NameOf(peSubnetId)}\". " +
+                                $"On the route table associated with source subnet \"{NameOf(sourceSubnetId)}\", add a UDR " +
+                                $"for {peIp}/32 (or another Microsoft-supported prefix at least as specific as the Private " +
+                                $"Endpoint VNet address space) with next hop VirtualAppliance {broadRoute.Ip}. The route belongs " +
+                                "in a route table, not an NSG; separately verify NSG rules allow the required flow.",
+                            Reference = LearnPrivateEndpointPolicies,
+                            Source = "rule",
+                        });
+                    }
+                }
+            }
+        }
+
         // ── RULE RT-NVA-001: UDR next hop does not match any discovered appliance ──
         // A route points at a virtual-appliance IP that is not the private IP of any discovered
         // Azure Firewall. The next hop may be a third-party NVA (fine) or a stale/typo'd IP that
@@ -728,6 +885,98 @@ public class RoutingAnalysisService : IRoutingAnalysisService
                 if (!string.IsNullOrWhiteSpace(ps)) yield return ps;
             }
         }
+    }
+
+    private static string? ParentResourceId(string resourceId, string childSegment)
+    {
+        var index = resourceId.IndexOf(childSegment, StringComparison.OrdinalIgnoreCase);
+        return index > 0 ? resourceId[..index] : null;
+    }
+
+    private static string? GetStringProperty(AzureResource? resource, string key)
+    {
+        if (resource?.Properties is null) return null;
+        foreach (var (name, value) in resource.Properties)
+        {
+            if (string.Equals(name, key, StringComparison.OrdinalIgnoreCase) && value is not null)
+                return value.ToString();
+        }
+        return null;
+    }
+
+    private static string? GetNestedReferenceId(AzureResource? resource, string key)
+    {
+        if (resource?.Properties is null) return null;
+        var value = resource.Properties.FirstOrDefault(pair =>
+            string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase)).Value;
+        if (value is not IDictionary<string, object> dictionary) return null;
+        return dictionary.FirstOrDefault(pair =>
+            string.Equals(pair.Key, "id", StringComparison.OrdinalIgnoreCase)).Value as string;
+    }
+
+    private static string? GetPrivateRoutingIntentNextHop(AzureResource? routingIntent)
+    {
+        if (routingIntent?.Properties is null) return null;
+        var raw = routingIntent.Properties.FirstOrDefault(pair =>
+            string.Equals(pair.Key, "routingPolicies", StringComparison.OrdinalIgnoreCase)).Value;
+        if (raw is not IEnumerable<object> policies) return null;
+        foreach (var item in policies)
+        {
+            if (item is not IDictionary<string, object> policy) continue;
+            var destinations = policy.FirstOrDefault(pair =>
+                string.Equals(pair.Key, "destinations", StringComparison.OrdinalIgnoreCase)).Value as IEnumerable<object>;
+            if (destinations is null || !destinations.Any(destination =>
+                    string.Equals(destination?.ToString(), "PrivateTraffic", StringComparison.OrdinalIgnoreCase)))
+                continue;
+            var nextHop = policy.FirstOrDefault(pair =>
+                string.Equals(pair.Key, "nextHop", StringComparison.OrdinalIgnoreCase)).Value?.ToString();
+            if (!string.IsNullOrWhiteSpace(nextHop)) return nextHop;
+        }
+        return null;
+    }
+
+    private static bool PrivateEndpointRoutePoliciesEnabled(string? policyState) =>
+        string.Equals(policyState, "Enabled", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(policyState, "RouteTableEnabled", StringComparison.OrdinalIgnoreCase);
+
+    private static int? MostSpecificContainingPrefixLength(
+        IEnumerable<string> prefixes,
+        IReadOnlyList<string> ips) =>
+        prefixes
+            .Where(prefix => ips.Any(ip => CidrContainsIp(prefix, ip)))
+            .Select(PrefixLength)
+            .Where(length => length.HasValue)
+            .Select(length => length!.Value)
+            .DefaultIfEmpty(-1)
+            .Max() is var max && max >= 0 ? max : null;
+
+    private static int? PrefixLength(string cidr)
+    {
+        var slash = cidr.IndexOf('/');
+        if (slash < 0 || !int.TryParse(cidr[(slash + 1)..], out var length) || length is < 0 or > 32)
+            return null;
+        return length;
+    }
+
+    private static bool CidrContainsIp(string cidr, string ipAddress)
+    {
+        if (!TryParseCidr(cidr, out var baseAddress, out var mask) ||
+            !TryParseIpv4(ipAddress, out var address))
+            return false;
+        return (address & mask) == baseAddress;
+    }
+
+    private static bool TryParseIpv4(string value, out uint address)
+    {
+        address = 0;
+        var octets = value.Split('.');
+        if (octets.Length != 4) return false;
+        foreach (var octet in octets)
+        {
+            if (!byte.TryParse(octet, out var parsed)) return false;
+            address = (address << 8) | parsed;
+        }
+        return true;
     }
 
     /// <summary>

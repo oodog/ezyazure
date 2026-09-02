@@ -78,4 +78,25 @@ public class DesignImportServiceTests
         Assert.All(result.Nodes, node => Assert.Null(node.ParentId));
         Assert.Contains(result.Warnings, warning => warning.Contains("cyclic parent"));
     }
+
+    [Fact]
+    public void NormalizeProposal_PreservesOnlyValidVisibleNetworkProperties()
+    {
+        var proposal = new DesignImportService.AiProposal
+        {
+            Summary = "Addressed network",
+            Nodes =
+            [
+                new() { Id = "vnet", BlockType = "VNet", Label = "VNet", AddressSpace = ["10.40.0.0/16", "not-cidr"] },
+                new() { Id = "subnet", BlockType = "Subnet", Label = "Subnet", ParentId = "vnet", AddressPrefix = "10.40.1.0/24" },
+                new() { Id = "pe", BlockType = "Private Endpoint", Label = "PE", ParentId = "subnet", PrivateIpAddress = "10.40.1.4" },
+            ],
+        };
+
+        var result = DesignImportService.NormalizeProposal(proposal, "network.png", "gpt-4o-mini");
+
+        Assert.Equal(new[] { "10.40.0.0/16" }, result.Nodes.Single(node => node.Id == "vnet").Properties["addressSpace"]);
+        Assert.Equal("10.40.1.0/24", result.Nodes.Single(node => node.Id == "subnet").Properties["addressPrefix"]);
+        Assert.Equal("10.40.1.4", result.Nodes.Single(node => node.Id == "pe").Properties["privateIpAddress"]);
+    }
 }

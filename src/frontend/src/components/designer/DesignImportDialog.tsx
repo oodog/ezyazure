@@ -302,7 +302,7 @@ export default function DesignImportDialog({
                 onClick={() => onApply(proposal, selectedNodeIds, mode)}
                 className="px-4 py-1.5 text-xs font-semibold text-white bg-azure-500 hover:bg-azure-600 disabled:opacity-50 rounded-md"
               >
-                Apply {selectedNodeIds.size} resources
+                Apply &amp; validate {selectedNodeIds.size} resources
               </button>
             </div>
           </footer>

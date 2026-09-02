@@ -1,0 +1,27 @@
+{
+  "$schema": "product-skill.schema.json",
+  "id": "networking",
+  "version": "1.0.0",
+  "name": "Networking",
+  "instructions": "Analyze routing symmetry, UDRs, peerings, DNS, Private Link, firewalls, VPN and ExpressRoute. Never claim an effective path was verified unless the evidence says so.",
+  "reference": "https://learn.microsoft.com/azure/networking/fundamentals/",
+  "intentKeywords": [
+    "route",
+    "routing",
+    "subnet",
+    "vnet",
+    "nsg",
+    "firewall",
+    "nva",
+    "private endpoint",
+    "private link",
+    "dns",
+    "vpn",
+    "expressroute",
+    "traffic",
+    "connection",
+    "asymmetric"
+  ],
+  "resourceTypes": ["easyazure.network/internet"],
+  "resourceTypePrefixes": ["microsoft.network/"]
+}

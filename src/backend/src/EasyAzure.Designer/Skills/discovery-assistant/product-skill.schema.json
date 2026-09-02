@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easyazure.microsoft/skills/product-skill.schema.json",
+  "title": "EasyAzure product skill",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "version",
+    "name",
+    "instructions",
+    "reference",
+    "intentKeywords",
+    "resourceTypes",
+    "resourceTypePrefixes"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "instructions": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "reference": {
+      "type": "string",
+      "pattern": "^https://learn\\.microsoft\\.com/"
+    },
+    "intentKeywords": { "$ref": "#/$defs/uniqueStrings" },
+    "resourceTypes": { "$ref": "#/$defs/uniqueStrings" },
+    "resourceTypePrefixes": { "$ref": "#/$defs/uniqueStrings" }
+  },
+  "$defs": {
+    "uniqueStrings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

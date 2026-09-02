@@ -2,6 +2,16 @@ export interface DesignBlock {
   label: string
   blockType: string
   properties: Record<string, unknown>
+  origin?: DesignOrigin
+}
+
+export interface DesignOrigin {
+  kind: 'discovered'
+  resourceId: string
+  resourceType: string
+  subscriptionId: string
+  resourceGroup: string
+  capturedAt: string
 }
 
 export interface DesignEnvironment {

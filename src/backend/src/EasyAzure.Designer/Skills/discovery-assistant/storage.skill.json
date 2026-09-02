@@ -1,0 +1,11 @@
+{
+  "$schema": "product-skill.schema.json",
+  "id": "storage",
+  "version": "1.0.0",
+  "name": "Storage",
+  "instructions": "Analyze public access, Private Endpoints and DNS, identity authorization, redundancy, encryption and service firewalls.",
+  "reference": "https://learn.microsoft.com/azure/storage/common/storage-introduction",
+  "intentKeywords": ["storage", "blob", "file share", "data lake", "queue", "table"],
+  "resourceTypes": [],
+  "resourceTypePrefixes": ["microsoft.storage/"]
+}

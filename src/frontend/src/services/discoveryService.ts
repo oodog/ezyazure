@@ -1,4 +1,5 @@
 import apiClient from './apiClient'
+import type { AxiosRequestConfig } from 'axios'
 import type { DashboardStats, TopologyGraph } from '@/types/azure'
 
 export interface ReplicationPreviewRequest {
@@ -84,6 +85,29 @@ export interface DataPathResult {
   bestPracticeNotes: string[]
   pathNodeIds: string[]
   destinationSummary?: string
+}
+
+export interface DiscoveryAssistantTurn {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface DiscoveryAssistantCitation {
+  title: string
+  url: string
+}
+
+export interface DiscoveryAssistantResponse {
+  answer: string
+  skills: string[]
+  skillBundleVersion?: string
+  skillVersions?: Record<string, string>
+  citations: DiscoveryAssistantCitation[]
+  suggestedChecks: string[]
+  confidence: 'high' | 'medium' | 'low'
+  limitations: string[]
+  aiUsed: boolean
+  aiModel?: string
 }
 
 export interface DiscoverySnapshotSummary {
@@ -210,6 +234,17 @@ export const discoveryService = {
     destinationPort: number
   }): Promise<DataPathResult> => {
     const { data } = await apiClient.post<DataPathResult>('/discovery/trace-path', req)
+    return data
+  },
+
+  askAssistant: async (req: {
+    subscriptionIds: string[]
+    message: string
+    history: DiscoveryAssistantTurn[]
+    focusTechnologies: string[]
+    focusResourceId?: string
+  }, config?: Pick<AxiosRequestConfig, 'signal'>): Promise<DiscoveryAssistantResponse> => {
+    const { data } = await apiClient.post<DiscoveryAssistantResponse>('/discovery/assistant/chat', req, config)
     return data
   },
 

@@ -1,0 +1,16 @@
+{
+  "$schema": "product-skill.schema.json",
+  "id": "containers",
+  "version": "1.0.0",
+  "name": "Containers",
+  "instructions": "Analyze AKS, Container Apps, ACR and container instances for ingress, workload identity, network controls, image access and availability.",
+  "reference": "https://learn.microsoft.com/azure/container-apps/overview",
+  "intentKeywords": ["aks", "kubernetes", "container app", "container instance", "acr", "registry", "pod"],
+  "resourceTypes": [],
+  "resourceTypePrefixes": [
+    "microsoft.app/",
+    "microsoft.containerservice/",
+    "microsoft.containerinstance/",
+    "microsoft.containerregistry/"
+  ]
+}

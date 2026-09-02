@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactFlow, {
   Background,
   BackgroundVariant,
@@ -33,11 +33,15 @@ import {
   applyDesignImport,
   type DesignImportApplyMode,
 } from '@/utils/designImportApply'
-
-interface EdgeData {
-  relationship?: string
-  properties?: Record<string, unknown>
-}
+import { materializeDesignEdges, type DesignEdgeData } from '@/utils/designEdges'
+import {
+  applyDesignIpSuggestions,
+  suggestMissingDesignIpRanges,
+  type DesignIpSuggestion,
+} from '@/utils/designIpSuggestions'
+import IpRangeSuggestionDialog from './IpRangeSuggestionDialog'
+import { consumeDiscoveryDesignHandoff } from '@/utils/discoveryDesignHandoff'
+import { analyzeDesignDelta } from '@/utils/designDelta'
 
 const nodeTypes = {
   azureResource: AzureResourceNode,
@@ -56,7 +60,7 @@ const defaultEdgeOptions = {
 
 function CanvasInner() {
   const [nodes, setNodes, onNodesChange] = useNodesState<DesignBlock>([])
-  const [edges, setEdges, onEdgesChange] = useEdgesState<EdgeData>([])
+  const [edges, setEdges, onEdgesChange] = useEdgesState<DesignEdgeData>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [findings, setFindings] = useState<ValidationFinding[] | null>(null)
@@ -68,18 +72,41 @@ function CanvasInner() {
   const [toast, setToast] = useState<{ kind: 'error' | 'info'; msg: string } | null>(null)
   const [bicepCode, setBicepCode] = useState<string | null>(null)
   const [importOpen, setImportOpen] = useState(false)
+  const [ipSuggestions, setIpSuggestions] = useState<DesignIpSuggestion[] | null>(null)
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, getIntersectingNodes, fitView } = useReactFlow()
 
+  const designEdges = useMemo(() => materializeDesignEdges(nodes, edges), [nodes, edges])
+  const designDelta = useMemo(() => analyzeDesignDelta(nodes, designEdges), [nodes, designEdges])
   const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null
-  const selectedEdge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) : null
+  const selectedEdge = selectedEdgeId ? designEdges.find((e) => e.id === selectedEdgeId) : null
   const selectedEdgeSrc = selectedEdge ? nodes.find((n) => n.id === selectedEdge.source) : null
   const selectedEdgeTgt = selectedEdge ? nodes.find((n) => n.id === selectedEdge.target) : null
+  const discoveredBaselineCount = nodes.filter((node) => node.data.origin?.kind === 'discovered').length
 
   const showToast = (kind: 'error' | 'info', msg: string) => {
     setToast({ kind, msg })
     window.setTimeout(() => setToast(null), 4000)
   }
+
+  useEffect(() => {
+    const handoff = consumeDiscoveryDesignHandoff()
+    if (!handoff) return
+    setNodes(handoff.nodes)
+    setEdges(handoff.edges)
+    const handoffEdges = materializeDesignEdges(handoff.nodes, handoff.edges)
+    setFindings(validateDesign(handoff.nodes, handoffEdges).map((finding) => ({
+      ...finding,
+      source: 'rule' as const,
+      requiresAcknowledgement: finding.requiresAcknowledgement ?? finding.severity !== 'info',
+    })))
+    setAcknowledged(new Set())
+    window.requestAnimationFrame(() => void fitView({ padding: 0.12, duration: 300 }))
+    const skipped = handoff.skippedResources.length > 0
+      ? ` ${handoff.skippedResources.length} unsupported resource(s) were skipped.`
+      : ''
+    showToast('info', `Opened ${handoff.nodes.length} discovered resource(s) as the deployment baseline.${skipped}`)
+  }, [fitView, setEdges, setNodes])
 
   // Block invalid connections
   const isValidConnection = useCallback(
@@ -294,6 +321,7 @@ function CanvasInner() {
       setAiUsed(false)
       setAiModel(null)
       setAiError(null)
+      setIpSuggestions(null)
     }
   }
 
@@ -310,7 +338,7 @@ function CanvasInner() {
 
   /** Local, fast, deterministic validation. */
   const runValidation = () => {
-    const local = validateDesign(nodes, edges).map((f) => ({
+    const local = validateDesign(nodes, designEdges).map((f) => ({
       ...f,
       source: 'rule' as const,
       requiresAcknowledgement: f.requiresAcknowledgement ?? f.severity !== 'info',
@@ -319,6 +347,8 @@ function CanvasInner() {
     setAiUsed(false)
     setAiModel(null)
     setAiError(null)
+    const suggestions = suggestMissingDesignIpRanges(nodes)
+    setIpSuggestions(suggestions.length > 0 ? suggestions : null)
   }
 
   /**
@@ -334,10 +364,23 @@ function CanvasInner() {
     setAiBusy(true)
     setAiError(null)
     try {
-      const report = await bestPracticeService.validateDesign(nodes, edges, true)
-      setFindings(report.findings.map(mapServerFinding))
+      const local = validateDesign(nodes, designEdges).map((finding) => ({
+        ...finding,
+        source: 'rule' as const,
+        requiresAcknowledgement: finding.requiresAcknowledgement ?? finding.severity !== 'info',
+      }))
+      const report = await bestPracticeService.validateDesign(nodes, designEdges, true)
+      const server = report.findings.map(mapServerFinding)
+      const merged = [...local, ...server].filter((finding, index, all) =>
+        all.findIndex((candidate) =>
+          candidate.ruleId === finding.ruleId &&
+          candidate.nodeId === finding.nodeId &&
+          candidate.message === finding.message) === index)
+      setFindings(merged)
       setAiUsed(report.aiUsed)
       setAiModel(report.aiModel ?? null)
+      const suggestions = suggestMissingDesignIpRanges(nodes)
+      setIpSuggestions(suggestions.length > 0 ? suggestions : null)
       if (!report.aiUsed) {
         showToast('info', 'Azure OpenAI not configured on the server — showing rule-based findings only.')
       }
@@ -364,7 +407,26 @@ function CanvasInner() {
       showToast('error', 'Add at least one block before generating Bicep.')
       return
     }
-    const code = generateBicep(nodes, edges)
+    if (designDelta.hasBaseline) {
+      const latestFindings = validateDesign(nodes, designEdges).map((finding) => ({
+        ...finding,
+        source: 'rule' as const,
+        requiresAcknowledgement: finding.requiresAcknowledgement ?? finding.severity !== 'info',
+      }))
+      setFindings(latestFindings)
+      if (designDelta.newNodes.length === 0) {
+        showToast('error', 'Add at least one new resource before generating an additions-only deployment.')
+        return
+      }
+      const newNodeIds = new Set(designDelta.newNodes.map((node) => node.id))
+      const errors = latestFindings.filter((finding) => finding.severity === 'error' &&
+        (finding.ruleId.startsWith('Delta.') || !!finding.nodeId && newNodeIds.has(finding.nodeId))).length
+      if (errors > 0) {
+        showToast('error', `Resolve ${errors} validation error${errors === 1 ? '' : 's'} before generating additions-only Bicep.`)
+        return
+      }
+    }
+    const code = generateBicep(nodes, designEdges)
     setBicepCode(code)
   }
 
@@ -374,18 +436,42 @@ function CanvasInner() {
     mode: DesignImportApplyMode,
   ) => {
     const result = applyDesignImport(proposal, selectedNodeIds, nodes, edges, mode)
+    const importedDesignEdges = materializeDesignEdges(result.nodes, result.edges)
     setNodes(result.nodes)
     setEdges(result.edges)
     setSelectedNodeId(null)
     setSelectedEdgeId(null)
-    setFindings(null)
+    setFindings(validateDesign(result.nodes, importedDesignEdges).map((finding) => ({
+      ...finding,
+      source: 'rule' as const,
+      requiresAcknowledgement: finding.requiresAcknowledgement ?? finding.severity !== 'info',
+    })))
     setAcknowledged(new Set())
     setImportOpen(false)
+    const suggestions = suggestMissingDesignIpRanges(result.nodes)
+    setIpSuggestions(suggestions.length > 0 ? suggestions : null)
     window.requestAnimationFrame(() => void fitView({ padding: 0.15, duration: 300 }))
     const warningSuffix = result.warnings.length > 0
       ? ` ${result.warnings.length} unsupported relationship(s) were skipped.`
       : ''
     showToast('info', `Imported ${selectedNodeIds.size} resource(s).${warningSuffix}`)
+  }
+
+  const applySuggestedIpRanges = () => {
+    if (!ipSuggestions) return
+    const updatedNodes = applyDesignIpSuggestions(nodes, ipSuggestions)
+    const updatedEdges = materializeDesignEdges(updatedNodes, edges)
+    setNodes(updatedNodes)
+    setIpSuggestions(null)
+    setFindings(validateDesign(updatedNodes, updatedEdges).map((finding) => ({
+      ...finding,
+      source: 'rule' as const,
+      requiresAcknowledgement: finding.requiresAcknowledgement ?? finding.severity !== 'info',
+    })))
+    setAcknowledged(new Set())
+    setAiUsed(false)
+    setAiModel(null)
+    showToast('info', `Added ${ipSuggestions.length} example IP range${ipSuggestions.length === 1 ? '' : 's'} for review.`)
   }
 
   /** Stable key for a finding's acknowledgement state. */
@@ -399,15 +485,18 @@ function CanvasInner() {
    */
   const deployGate = useMemo(() => {
     if (!findings) return { blocked: false, errors: 0, pendingAck: 0 }
-    const errors = findings.filter((f) => f.severity === 'error').length
+    const newNodeIds = new Set(designDelta.newNodes.map((node) => node.id))
+    const affectsDeployment = (finding: ValidationFinding) => !designDelta.hasBaseline ||
+      finding.ruleId.startsWith('Delta.') || !!finding.nodeId && newNodeIds.has(finding.nodeId)
+    const errors = findings.filter((f) => f.severity === 'error' && affectsDeployment(f)).length
     let pendingAck = 0
     findings.forEach((f, i) => {
-      if (f.requiresAcknowledgement && !acknowledged.has(ackKey(f, i))) {
+      if (affectsDeployment(f) && f.requiresAcknowledgement && !acknowledged.has(ackKey(f, i))) {
         pendingAck += 1
       }
     })
     return { blocked: errors > 0 || pendingAck > 0, errors, pendingAck }
-  }, [findings, acknowledged])
+  }, [findings, acknowledged, designDelta])
 
   return (
     <div className="flex h-full gap-3 relative">
@@ -417,7 +506,7 @@ function CanvasInner() {
         {/* Toolbar */}
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <div>
-            <h1 className="text-lg font-bold text-gray-900 leading-tight">Environment Designer</h1>
+            <h1 className="text-lg font-bold text-gray-900 leading-tight">Design / Validate</h1>
             <p className="text-xs text-gray-400">
               Drop containers (VNet, Resource Group, …) first, then drop child blocks inside them. Connect blocks to define associations.
             </p>
@@ -427,6 +516,11 @@ function CanvasInner() {
             {nodes.length > 0 && (
               <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
                 {nodes.length} block{nodes.length !== 1 ? 's' : ''}
+              </span>
+            )}
+            {discoveredBaselineCount > 0 && (
+              <span className="text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 px-2 py-1 rounded-full">
+                {discoveredBaselineCount} existing baseline
               </span>
             )}
 
@@ -490,7 +584,7 @@ function CanvasInner() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                   d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
               </svg>
-              Generate Bicep
+              {designDelta.hasBaseline ? 'Generate additions Bicep' : 'Generate Bicep'}
               {deployGate.blocked && (
                 <span className="ml-1 text-[10px] bg-white/20 rounded px-1">
                   {deployGate.errors > 0 ? `${deployGate.errors} err` : `${deployGate.pendingAck} ack`}
@@ -505,7 +599,7 @@ function CanvasInner() {
           className="flex-1 bg-white border border-gray-200 rounded-xl overflow-hidden relative">
           <ReactFlow
             nodes={nodes}
-            edges={edges}
+            edges={designEdges}
             nodeTypes={nodeTypes}
             defaultEdgeOptions={defaultEdgeOptions}
             onNodesChange={onNodesChange}
@@ -516,7 +610,12 @@ function CanvasInner() {
             onDragOver={onDragOver}
             onNodeDragStop={onNodeDragStop}
             onNodeClick={(_, node) => { setSelectedNodeId(node.id); setSelectedEdgeId(null) }}
-            onEdgeClick={(_, edge) => { setSelectedEdgeId(edge.id); setSelectedNodeId(null) }}
+            onEdgeClick={(_, edge) => {
+              const edgeData = edge.data as DesignEdgeData | undefined
+              if (edgeData?.generatedContainment || edgeData?.origin === 'discovered') return
+              setSelectedEdgeId(edge.id)
+              setSelectedNodeId(null)
+            }}
             onPaneClick={() => { setSelectedNodeId(null); setSelectedEdgeId(null) }}
             deleteKeyCode="Delete"
             fitView
@@ -681,13 +780,34 @@ function CanvasInner() {
         )}
       </div>
 
-      {selectedNode && (
+      {selectedNode && selectedNode.data.origin?.kind !== 'discovered' && (
         <PropertyEditor
           nodeId={selectedNode.id}
           block={selectedNode.data as DesignBlock}
           onChange={updateNode}
           onClose={() => setSelectedNodeId(null)}
         />
+      )}
+
+      {selectedNode?.data.origin?.kind === 'discovered' && (
+        <aside className="w-80 shrink-0 overflow-hidden rounded-xl border border-blue-200 bg-white shadow-sm">
+          <div className="border-b border-blue-100 bg-blue-50 px-4 py-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-gray-900">{selectedNode.data.label}</p>
+                <p className="text-xs font-medium text-blue-700">Existing discovered baseline</p>
+              </div>
+              <button type="button" onClick={() => setSelectedNodeId(null)} className="text-gray-400 hover:text-gray-700" aria-label="Close baseline details">×</button>
+            </div>
+          </div>
+          <div className="space-y-3 px-4 py-4 text-xs">
+            <div>
+              <p className="font-semibold text-gray-500">Azure resource ID</p>
+              <code className="mt-1 block break-all rounded bg-slate-50 p-2 text-[10px] text-slate-700">{selectedNode.data.origin.resourceId}</code>
+            </div>
+            <p className="text-gray-600">This baseline resource is referenced by additions-only Bicep and will not be redeployed or edited.</p>
+          </div>
+        </aside>
       )}
 
       {selectedEdge && selectedEdgeSrc && selectedEdgeTgt && (
@@ -702,7 +822,14 @@ function CanvasInner() {
       )}
 
       {bicepCode && (
-        <BicepModal bicep={bicepCode} onClose={() => setBicepCode(null)} />
+        <BicepModal
+          bicep={bicepCode}
+          additionsOnly={designDelta.hasBaseline}
+          createdResources={designDelta.newNodes.length}
+          existingReferences={designDelta.existingNodes.length}
+          requiredDeploymentScope={designDelta.requiredDeploymentScopes[0]}
+          onClose={() => setBicepCode(null)}
+        />
       )}
 
       {importOpen && (
@@ -710,6 +837,21 @@ function CanvasInner() {
           existingNodeCount={nodes.length}
           onApply={handleApplyImport}
           onClose={() => setImportOpen(false)}
+        />
+      )}
+
+      {ipSuggestions && (
+        <IpRangeSuggestionDialog
+          suggestions={ipSuggestions}
+          noRangesConfigured={nodes.every((node) => {
+            if (node.data.blockType === 'VNet')
+              return !Array.isArray(node.data.properties.addressSpace) || node.data.properties.addressSpace.length === 0
+            if (node.data.blockType === 'Subnet' || node.data.blockType === 'Virtual Hub')
+              return !node.data.properties.addressPrefix
+            return true
+          })}
+          onApply={applySuggestedIpRanges}
+          onClose={() => setIpSuggestions(null)}
         />
       )}
     </div>

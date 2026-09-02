@@ -39,6 +39,7 @@ export interface DesignImportNode {
   parentId?: string | null
   confidence: number
   evidence: string
+  properties: Record<string, unknown>
 }
 
 export interface DesignImportEdge {

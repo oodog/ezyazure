@@ -22,6 +22,7 @@ publish/
 .env
 .env.*
 !.env.example
+.azure/
 
 # Secrets — never commit real secrets
 appsettings.Local.json
@@ -33,6 +34,7 @@ local.settings.json
 # Bicep / ARM — generated files only, not authored
 infra/*.json
 !infra/bicepconfig.json
+!infra/main.parameters.json
 
 # Docker
 .docker/
@@ -40,6 +42,12 @@ infra/*.json
 # Coverage
 coverage/
 *.lcov
+
+# Local deployment diagnostics
+azd-*.log
+
+# Local architecture samples may contain customer or third-party content
+examples/
 
 # IDE
 .idea/

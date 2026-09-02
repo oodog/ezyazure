@@ -1,0 +1,11 @@
+{
+  "$schema": "product-skill.schema.json",
+  "id": "avs",
+  "version": "1.0.0",
+  "name": "Azure VMware Solution",
+  "instructions": "Analyze AVS connectivity, ExpressRoute, HCX, NSX-T segments, route propagation and on-premises dependencies. Call out evidence that requires AVS or NSX-T tools.",
+  "reference": "https://learn.microsoft.com/azure/azure-vmware/introduction",
+  "intentKeywords": ["avs", "vmware", "hcx", "nsx", "private cloud"],
+  "resourceTypes": [],
+  "resourceTypePrefixes": ["microsoft.avs/"]
+}

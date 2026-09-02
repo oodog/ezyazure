@@ -85,6 +85,7 @@ export function applyDesignImport(
           label: node.label,
           blockType: node.blockType,
           properties: {
+            ...(node.properties ?? {}),
             importConfidence: node.confidence,
             importEvidence: node.evidence,
             importSource: proposal.sourceFileName,

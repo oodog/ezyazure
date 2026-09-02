@@ -99,6 +99,26 @@ User selects source + destination + protocol/port
   → Return PathResult: Allowed / Blocked / Unknown + hop trace
 ```
 
+## Discovery assistant skills
+
+The Discovery assistant is one C# orchestration service with a versioned product-skill bundle. It
+does not create an independent agent for each Azure product. At startup, the API loads and validates
+the manifest and all product-group definitions before accepting traffic.
+
+```
+Product skill JSON bundle
+  → JsonProductSkillProvider: strict parsing and manifest controls
+  → ProductSkillRegistry: IDs, versions, Learn URLs and resource mappings validated
+  → Deterministic selection: explicit focus, intent terms and discovered resource types
+  → DiscoveryAssistantService: topology and routing evidence added as untrusted data
+  → Azure OpenAI: constrained JSON advisory response
+  → C# response validation: citations, limits, confidence and deterministic fallback
+```
+
+Product instructions and routing metadata are reviewed configuration. Authorization, topology
+grounding, secret filtering, prompt-injection boundaries and response validation remain compiled C#
+policy. See [Product skill governance](product-skills.md) for ownership and release procedures.
+
 ## Data flow — IaC generation and deployment
 
 ```

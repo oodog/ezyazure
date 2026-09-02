@@ -131,7 +131,13 @@ export const blockSchemas: Record<string, BlockSchema> = {
           'Microsoft.EventHub','Microsoft.CognitiveServices','Microsoft.Web','Microsoft.AzureCosmosDB']
           .map(v=>({value:v,label:v})) },
       { key: 'privateEndpointPolicies', label: 'Private endpoint network policies', type: 'select', group: 'Endpoints',
-        default: 'Disabled', options: [{value:'Disabled',label:'Disabled (default)'},{value:'Enabled',label:'Enabled (NSG applies to PE)'}] },
+        default: 'Disabled', options: [
+          {value:'Disabled',label:'Disabled (default)'},
+          {value:'NetworkSecurityGroupEnabled',label:'Network security groups only'},
+          {value:'RouteTableEnabled',label:'Route tables only'},
+          {value:'Enabled',label:'NSG and route tables'},
+        ],
+        help: 'Route Table policy is required when Private Endpoint traffic must follow UDRs through a firewall or NVA.' },
     ],
   },
   NSG: {
@@ -223,6 +229,8 @@ export const blockSchemas: Record<string, BlockSchema> = {
     fields: [
       nameField, locationField,
       { key: 'targetResourceId', label: 'Target resource ID', type: 'text', group: 'Target', required: true },
+      { key: 'privateIpAddress', label: 'Private IP address', type: 'text', group: 'General',
+        placeholder: '10.20.1.4', help: 'Optional static or planned PE IP. Required for exact /32 route validation.' },
       { key: 'groupId', label: 'Group ID (subresource)', type: 'select', group: 'Target',
         options: ['blob','file','queue','table','dfs','web','sqlServer','mariadbServer','postgresqlServer','mysqlServer','vault','sites','registry','managedInstance']
           .map(v=>({value:v,label:v})) },

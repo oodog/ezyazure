@@ -26,8 +26,7 @@ Used by the API and discovery workers to read existing Azure state.
 
 ```
 Role: Reader
-Role: Network Contributor (read-only network operations)
-Scope: Each managed subscription (not subscription of the tool itself)
+Scope: Each managed subscription
 ```
 
 ### Deployment identity (scoped Contributor)
@@ -45,19 +44,19 @@ Scope: Target resource group only
 
 ## Secret management
 
-- All secrets, certificates, and connection strings are stored in **Azure Key Vault**
-- The API retrieves secrets at startup using `DefaultAzureCredential` via the managed identity
+- Application Insights configuration is injected as a Container Apps secret
+- The API accesses Azure services with `DefaultAzureCredential` via its managed identity
 - No secrets in `appsettings.json`, code, or environment variables
-- Key Vault uses private endpoint — not accessible over the public internet
+- Key Vault has public network access disabled and is reserved for customer-managed secrets
 - Key Vault has soft-delete and purge protection enabled
 
 ## Network security
 
 - Frontend: Azure Static Web Apps (managed TLS, CDN)
 - API: Azure Container Apps (managed TLS, no public IP on containers)
-- All backend data stores (Cosmos DB, PostgreSQL, Storage, Key Vault) use **private endpoints**
-- Public network access disabled on all data plane resources
-- NSG on Container Apps environment allows only HTTPS inbound
+- The default self-hosted deployment is VNet-free for one-command setup
+- Storage exposes a public endpoint but requires Entra authentication; anonymous and shared-key access are disabled
+- Customers requiring private-only data planes add approved VNet/private endpoint architecture before production
 
 ## Transport security
 
@@ -71,6 +70,11 @@ Scope: Target resource group only
 - `allowSharedKeyAccess: false` on Storage (requires Entra auth or SAS with short expiry)
 - `allowBlobPublicAccess: false` on all containers
 - Key Vault RBAC authorization (not legacy access policies)
+- Discovery product-skill bundles are manifest-controlled, strictly parsed, and validated before the
+	API starts
+- Product skills can reference only HTTPS content on `learn.microsoft.com`; user questions and
+	discovered resource values are always treated as untrusted data
+- Skill configuration cannot grant tools, Azure permissions, or deployment rights
 
 ## Audit trail
 

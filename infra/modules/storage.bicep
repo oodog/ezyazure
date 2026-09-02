@@ -1,5 +1,9 @@
 param name string
 param location string
+@allowed(['Enabled', 'Disabled'])
+param publicNetworkAccess string = 'Enabled'
+@allowed(['Allow', 'Deny'])
+param networkDefaultAction string = 'Allow'
 param tags object = {}
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2025-01-01' = {
@@ -16,10 +20,12 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2025-01-01' = {
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false
-    publicNetworkAccess: 'Disabled'
+    // The default azd deployment is intentionally VNet-free. Access remains authenticated
+    // with Entra ID because shared keys and anonymous blob access are disabled.
+    publicNetworkAccess: publicNetworkAccess
     networkAcls: {
       bypass: 'AzureServices'
-      defaultAction: 'Deny'
+      defaultAction: networkDefaultAction
     }
   }
 }
@@ -57,3 +63,4 @@ resource exportsContainer 'Microsoft.Storage/storageAccounts/blobServices/contai
 
 output id string = storageAccount.id
 output name string = storageAccount.name
+output blobEndpoint string = storageAccount.properties.primaryEndpoints.blob

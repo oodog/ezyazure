@@ -16,4 +16,9 @@
   <ItemGroup>
     <InternalsVisibleTo Include="EasyAzure.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <None Update="Skills\**\*.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactFlow, {
   Background,
   Controls,
@@ -11,7 +11,7 @@ import ReactFlow, {
   type ReactFlowInstance,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { discoveryService } from '@/services/discoveryService'
 import type { RoutingAnalysisReport, DataPathResult } from '@/services/discoveryService'
 import ResourcePanel from './ResourcePanel'
@@ -33,6 +33,15 @@ import {
   type DiscoveryTechnology,
   type DiscoveryTopologyView,
 } from '@/utils/discoveryTechnology'
+import {
+  captureTopologyJpeg,
+  createDrawioXml,
+  createTopologyPdf,
+  downloadFile,
+  topologyExportFileName,
+  type TopologyExportFormat,
+} from '@/utils/topologyExport'
+import { createDiscoveryDesignHandoff, saveDiscoveryDesignHandoff } from '@/utils/discoveryDesignHandoff'
 
 const nodeTypes = { azureResource: DiscoveryResourceNode }
 const INTERNET_NODE_ID = 'easyazure://internet'
@@ -101,9 +110,12 @@ function toReactFlowEdge(e: ApiFlowEdge): Edge {
 
 export default function DiscoveryView() {
   const { subscriptionId } = useParams()
+  const navigate = useNavigate()
   const [nodes, setNodes, onNodesChange] = useNodesState<AzureResource>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null)
+  const topologyCanvasRef = useRef<HTMLDivElement>(null)
+  const [exporting, setExporting] = useState<TopologyExportFormat | null>(null)
   const [selectedResource, setSelectedResource] = useState<AzureResource | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -468,6 +480,13 @@ export default function DiscoveryView() {
     [filteredGraph.nodes],
   )
 
+  const assistantTechnologies = useMemo<DiscoveryTechnology[]>(() => {
+    if (selectedTechnologies.size > 0) return Array.from(selectedTechnologies)
+    if (topologyView === 'network') return ['networking']
+    if (topologyView === 'network-compute') return ['networking', 'compute']
+    return []
+  }, [selectedTechnologies, topologyView])
+
   useEffect(() => {
     if (!flowInstance || filteredGraph.nodes.length === 0) return
     const frame = window.requestAnimationFrame(() => {
@@ -475,6 +494,54 @@ export default function DiscoveryView() {
     })
     return () => window.cancelAnimationFrame(frame)
   }, [flowInstance, topologyView, selectedTechnologies, filteredGraph.nodes.length])
+
+  const exportTopology = useCallback(async (format: TopologyExportFormat) => {
+    if (filteredGraph.nodes.length === 0) return
+    setExporting(format)
+    setError(null)
+    try {
+      if (format === 'drawio') {
+        const xml = createDrawioXml(
+          filteredGraph.nodes,
+          filteredGraph.edges,
+          `EasyAzure ${topologyView} topology`,
+        )
+        downloadFile(
+          new Blob([xml], { type: 'application/vnd.jgraph.mxfile;charset=utf-8' }),
+          topologyExportFileName(topologyView, 'drawio'),
+        )
+        return
+      }
+
+      const viewportElement = topologyCanvasRef.current?.querySelector<HTMLElement>('.react-flow__viewport')
+      if (!viewportElement) throw new Error('The topology canvas is not ready.')
+      const image = await captureTopologyJpeg(viewportElement, filteredGraph.nodes)
+      if (format === 'jpeg') {
+        downloadFile(image.blob, topologyExportFileName(topologyView, 'jpeg'))
+      } else {
+        const pdf = await createTopologyPdf(image, `EasyAzure Discovery - ${topologyView} topology`)
+        downloadFile(pdf, topologyExportFileName(topologyView, 'pdf'))
+      }
+    } catch (exportError: unknown) {
+      setError(exportError instanceof Error ? `Export failed: ${exportError.message}` : 'Export failed.')
+    } finally {
+      setExporting(null)
+    }
+  }, [filteredGraph.edges, filteredGraph.nodes, topologyView])
+
+  const openInDesigner = useCallback(() => {
+    try {
+      const handoff = createDiscoveryDesignHandoff(filteredGraph.nodes, filteredGraph.edges)
+      if (handoff.nodes.length === 0) {
+        setError('No resources in the current view can be opened in Design / Validate.')
+        return
+      }
+      saveDiscoveryDesignHandoff(handoff)
+      navigate('/designer?source=discovery')
+    } catch (handoffError: unknown) {
+      setError(handoffError instanceof Error ? handoffError.message : 'The topology could not be opened in Design / Validate.')
+    }
+  }, [filteredGraph.edges, filteredGraph.nodes, navigate])
 
   return (
     <div className="flex h-full gap-3">
@@ -516,6 +583,12 @@ export default function DiscoveryView() {
             setTopologyView('network-compute')
             setDataPathOpen(true)
           }}
+          exporting={exporting}
+          onExport={exportTopology}
+          assistantSubscriptionIds={selectedSubIds}
+          assistantTechnologies={assistantTechnologies}
+          assistantResourceId={selectedNodeId ?? undefined}
+          onOpenInDesigner={openInDesigner}
         />
       )}
       <div className="flex-1 flex flex-col min-w-0">
@@ -655,7 +728,7 @@ export default function DiscoveryView() {
             </ul>
           </div>
         )}
-        <div className="relative flex-1 bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div ref={topologyCanvasRef} className="relative flex-1 bg-white border border-gray-200 rounded-lg overflow-hidden">
           {nodes.length > 0 && filteredGraph.nodes.length === 0 && (
             <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
               <div className="max-w-xs text-center px-5 py-4 bg-white border border-gray-200 rounded-lg shadow-sm">

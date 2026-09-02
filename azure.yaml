@@ -1,0 +1,50 @@
+name: easyazure
+metadata:
+  template: easyazure@1.0.0
+
+requiredVersions:
+  azd: '>= 1.20.0'
+
+infra:
+  provider: bicep
+  path: ./infra
+  module: main
+
+services:
+  api:
+    project: ./src/backend
+    language: docker
+    host: containerapp
+    apiVersion: '2025-01-01'
+    docker:
+      path: ./src/EasyAzure.Api/Dockerfile
+      context: .
+      remoteBuild: true
+      registry: ${AZURE_CONTAINER_REGISTRY_ENDPOINT}
+      image: easyazure-api
+  web:
+    project: ./src/frontend
+    language: ts
+    host: staticwebapp
+    dist: dist
+
+workflows:
+  up:
+    steps:
+      - azd: provision
+      - azd: package
+      - azd: deploy --all
+
+hooks:
+  preup:
+    kind: js
+    run: ./scripts/deployment/entra.mjs
+    interactive: true
+  postprovision:
+    kind: js
+    run: ./scripts/deployment/entra-redirect.mjs
+  postup:
+    - kind: js
+      run: ./scripts/deployment/entra-redirect.mjs
+    - kind: js
+      run: ./scripts/deployment/validate-deployment.mjs
