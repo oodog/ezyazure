@@ -4,6 +4,8 @@ An Azure drag-and-drop environment builder, discovery engine, data-path visualiz
 
 For a short, non-technical introduction, see the
 [EasyAzure day-to-day presentation](docs/easyazure-presentation.md).
+For a pitch, demo script, judging questions, and specialist asks, see the
+[EasyAzure hackathon notes](docs/hackathon-notes.md).
 
 ## What it does
 
