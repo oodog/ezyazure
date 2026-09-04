@@ -1,8 +1,8 @@
 import dagre from 'dagre'
 import type { Edge, Node } from 'reactflow'
 
-const NODE_W = 220
-const NODE_H = 100
+const NODE_W = 224
+const NODE_H = 112
 
 /**
  * Apply a left-to-right dagre layout so the topology nodes don't overlap.
@@ -17,7 +17,7 @@ export function applyDagreLayout<T>(nodes: Node<T>[], edges: Edge[]): Node<T>[] 
   graph.setGraph({
     rankdir: 'LR',
     nodesep: 40,
-    ranksep: 90,
+       ranksep: 240,
     marginx: 20,
     marginy: 20,
   })

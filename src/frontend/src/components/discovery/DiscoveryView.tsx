@@ -17,6 +17,7 @@ import type { RoutingAnalysisReport, DataPathResult } from '@/services/discovery
 import ResourcePanel from './ResourcePanel'
 import ReplicateDialog from './ReplicateDialog'
 import DiscoveryResourceNode from './DiscoveryResourceNode'
+import DiscoveryEdge from './DiscoveryEdge'
 import RoutingFindingsPanel from './RoutingFindingsPanel'
 import DataPathPanel from './DataPathPanel'
 import VersionHistoryPanel from './VersionHistoryPanel'
@@ -44,6 +45,7 @@ import {
 import { createDiscoveryDesignHandoff, saveDiscoveryDesignHandoff } from '@/utils/discoveryDesignHandoff'
 
 const nodeTypes = { azureResource: DiscoveryResourceNode }
+const edgeTypes = { discoveryEdge: DiscoveryEdge }
 const INTERNET_NODE_ID = 'easyazure://internet'
 
 /**
@@ -89,6 +91,7 @@ function toReactFlowEdge(e: ApiFlowEdge): Edge {
   const s = edgeStyleFor(e.category)
   return {
     id: e.id.toLowerCase(),
+    type: 'discoveryEdge',
     source: e.source.toLowerCase(),
     target: e.target.toLowerCase(),
     label: e.label,
@@ -106,6 +109,31 @@ function toReactFlowEdge(e: ApiFlowEdge): Edge {
     markerEnd: { type: MarkerType.ArrowClosed, color: s.stroke },
     data: { category: e.category, metadata: e.metadata },
   }
+}
+
+function separateParallelEdgeLabels(edges: Edge[]): Edge[] {
+  const groups = new Map<string, Edge[]>()
+  for (const edge of edges) {
+    if (edge.label == null || edge.label === '') continue
+    const pair = [edge.source, edge.target].sort().join('\u0000')
+    groups.set(pair, [...(groups.get(pair) ?? []), edge])
+  }
+
+  const offsets = new Map<string, number>()
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+    group
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .forEach((edge, index) => offsets.set(edge.id, (index - (group.length - 1) / 2) * 42))
+  }
+
+  return edges.map((edge) => ({
+    ...edge,
+    data: {
+      ...(edge.data as Record<string, unknown> | undefined),
+      labelOffsetY: offsets.get(edge.id) ?? 0,
+    },
+  }))
 }
 
 export default function DiscoveryView() {
@@ -470,10 +498,46 @@ export default function DiscoveryView() {
       selectedTechnologies,
     )
     return {
-      nodes: applyDagreLayout(filtered.nodes, filtered.edges),
-      edges: filtered.edges,
+      nodes: filtered.nodes,
+      edges: separateParallelEdgeLabels(filtered.edges),
     }
   }, [renderedNodes, renderedEdges, topologyView, selectedTechnologies])
+
+  const saveNodePosition = useCallback((movedNode: Node<AzureResource>) => {
+    setNodes((current) => {
+      const next = current.map((node) => node.id === movedNode.id
+        ? { ...node, position: movedNode.position }
+        : node)
+      saveDiscoveryCache({
+        subscriptionIds: selectedSubIds,
+        nodes: next,
+        edges,
+        capturedAt: Date.now(),
+      })
+      return next
+    })
+  }, [edges, selectedSubIds, setNodes])
+
+  const autoLayout = useCallback(() => {
+    const laidOut = applyDagreLayout(filteredGraph.nodes, filteredGraph.edges)
+    const positions = new Map(laidOut.map((node) => [node.id, node.position]))
+    setNodes((current) => {
+      const next = current.map((node) => {
+        const position = positions.get(node.id)
+        return position ? { ...node, position } : node
+      })
+      saveDiscoveryCache({
+        subscriptionIds: selectedSubIds,
+        nodes: next,
+        edges,
+        capturedAt: Date.now(),
+      })
+      return next
+    })
+    window.requestAnimationFrame(() => {
+      void flowInstance?.fitView({ padding: 0.18, duration: 250 })
+    })
+  }, [edges, filteredGraph.edges, filteredGraph.nodes, flowInstance, selectedSubIds, setNodes])
 
   const visibleNodeIds = useMemo(
     () => new Set(filteredGraph.nodes.map((node) => node.id)),
@@ -706,6 +770,15 @@ export default function DiscoveryView() {
           >
             Version history
           </button>
+          <button
+            type="button"
+            onClick={autoLayout}
+            disabled={filteredGraph.nodes.length === 0}
+            title="Rearrange the visible resources, then fit the topology into view."
+            className="border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50 text-gray-700 text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
+          >
+            Auto layout
+          </button>
         </div>
         {error && (
           <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">
@@ -743,11 +816,13 @@ export default function DiscoveryView() {
             nodes={filteredGraph.nodes}
             edges={filteredGraph.edges}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             onInit={setFlowInstance}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
-            nodesDraggable={false}
+            nodesDraggable
             nodesConnectable={false}
+            onNodeDragStop={(_, movedNode) => saveNodePosition(movedNode as Node<AzureResource>)}
             onNodeClick={(_, node) => {
               setSelectedNodeId(node.id)
               setSelectedResource(node.data as AzureResource)

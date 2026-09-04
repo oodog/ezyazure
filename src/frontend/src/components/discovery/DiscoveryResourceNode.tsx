@@ -81,7 +81,7 @@ function DiscoveryResourceNode({ data, selected }: NodeProps<NodeData>) {
     getVmPrivateIps(data)[0]
   return (
     <div
-      className={`relative bg-white rounded-xl shadow-md border-2 transition-all duration-150 w-52 ${
+      className={`relative w-56 min-h-28 bg-white rounded-xl shadow-md border-2 transition-all duration-150 ${
         selected ? 'shadow-lg ring-2 ring-offset-1' : 'border-gray-200 hover:border-gray-300 hover:shadow-lg'
       }`}
       style={selected ? { borderColor: cat.accent } : { borderColor: '#e5e7eb' }}
@@ -101,13 +101,13 @@ function DiscoveryResourceNode({ data, selected }: NodeProps<NodeData>) {
             <img src={iconSrc} alt="" className="w-4 h-4 object-contain" loading="lazy" decoding="async" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold text-gray-800 leading-tight truncate" title={data.name}>{data.name}</p>
-            <p className="text-[10px] font-medium mt-0.5 truncate" style={{ color: cat.accent }}>{cat.label}</p>
+            <p className="text-xs font-semibold text-gray-800 leading-4 break-words" title={data.name}>{data.name}</p>
+            <p className="text-[10px] font-medium mt-0.5 break-words" style={{ color: cat.accent }}>{cat.label}</p>
             {prefix && (
-              <p className="text-[10px] text-blue-700 font-mono truncate" title={prefix}>{prefix}</p>
+              <p className="text-[10px] text-blue-700 font-mono break-all" title={prefix}>{prefix}</p>
             )}
             {data.location && (
-              <p className="text-[10px] text-gray-500 truncate" title={data.resourceGroup}>{data.location}</p>
+              <p className="text-[10px] text-gray-500 break-words" title={data.resourceGroup}>{data.location}</p>
             )}
           </div>
         </div>
