@@ -1,6 +1,7 @@
 import { getNodesBounds, getViewportForBounds, type Edge, type Node } from 'reactflow'
 import { toJpeg } from 'html-to-image'
 import type { AzureResource } from '@/types/azure'
+import { getVmPrivateIps } from './azureResourceDetails'
 
 export type TopologyExportFormat = 'pdf' | 'jpeg' | 'drawio'
 
@@ -118,9 +119,20 @@ export function createDrawioXml(
   const nodeCellIds = new Map(nodes.map((node, index) => [node.id, `node-${index + 2}`]))
   const nodeCells = positions.map(({ node, x: originalX, y: originalY }) => {
     const cellId = nodeCellIds.get(node.id)!
-    const label = [node.data.name, shortResourceType(node.data.type), node.data.location]
+    const privateIps = node.data.type.toLowerCase() === 'microsoft.compute/virtualmachines'
+      ? getVmPrivateIps(node.data)
+      : []
+    const ipLabel = privateIps.length === 1 ? 'Private IP' : 'Private IPs'
+    const label = [
+      `<b>${escapeHtml(node.data.name)}</b>`,
+      escapeHtml(shortResourceType(node.data.type)),
+      privateIps.length > 0
+        ? `${ipLabel}: <b>${escapeHtml(privateIps.join(', '))}</b>`
+        : '',
+      escapeHtml(node.data.location),
+    ]
       .filter(Boolean)
-      .join('\n')
+      .join('<br> ')
     const x = originalX + offsetX
     const y = originalY + offsetY
     return `        <mxCell id="${cellId}" value="${escapeXml(label)}" vertex="1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;shadow=1;fillColor=#ffffff;strokeColor=${nodeColor(node.data.type)};strokeWidth=2;fontColor=#0f172a;align=left;verticalAlign=middle;spacingLeft=12;" easyazureResourceId="${escapeXml(node.data.id)}" easyazureResourceType="${escapeXml(node.data.type)}" easyazureSubscriptionId="${escapeXml(node.data.subscriptionId)}" easyazureResourceGroup="${escapeXml(node.data.resourceGroup)}">
@@ -208,4 +220,13 @@ function escapeXml(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/'/g, '&apos;')
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }

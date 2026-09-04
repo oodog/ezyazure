@@ -1,3 +1,4 @@
+using EasyAzure.Core.Models;
 using EasyAzure.Discovery.Services;
 using Newtonsoft.Json.Linq;
 using System.Text.Json;
@@ -72,6 +73,27 @@ public class NormalizeJTokenTests
     {
         Assert.Null(ResourceGraphService.NormalizeJTokenToNative(null));
         Assert.Null(ResourceGraphService.NormalizeJTokenToNative(JValue.CreateNull()));
+    }
+
+    [Fact]
+    public void ParseCountQueryResult_ReadsNumericResourceGraphAggregate()
+    {
+        var responseData = JArray.Parse("""[{ "count_": 42 }]""");
+
+        var count = ResourceGraphService.ParseCountQueryResult(responseData);
+
+        Assert.Equal(42, count);
+    }
+
+    [Fact]
+    public void DashboardStats_SerializesVnetCountWithFrontendContractName()
+    {
+        var json = JsonSerializer.Serialize(
+            new DashboardStats { VNetCount = 4 },
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+
+        Assert.Contains("\"vnetCount\":4", json);
+        Assert.DoesNotContain("\"vNetCount\"", json);
     }
 
     [Fact]

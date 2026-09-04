@@ -61,27 +61,66 @@ public class ResourceGraphService
             "Resources | project id, name, type, location, resourceGroup, subscriptionId, properties, tags | order by id asc",
             [subscriptionId], ct);
 
-    public async Task<int> CountAllResourcesAsync(CancellationToken ct = default)
+    public Task<int> CountAllResourcesAsync(
+        IReadOnlyList<string> subscriptions,
+        CancellationToken ct = default) =>
+        QueryCountAsync("Resources | summarize count()", subscriptions, ct);
+
+    public Task<int> CountResourceTypeAsync(
+        string resourceType,
+        IReadOnlyList<string> subscriptions,
+        CancellationToken ct = default)
     {
-        const string query = "Resources | summarize count()";
-        var results = await QueryAsync(query, null, ct);
-        // The count is returned as a single row; parse from properties
-        if (results.Count > 0 && results[0].Properties.TryGetValue("count_", out var count))
-        {
-            return Convert.ToInt32(count);
-        }
-        return 0;
+        var escapedType = resourceType.Replace("'", "''", StringComparison.Ordinal);
+        return QueryCountAsync(
+            $"Resources | where type =~ '{escapedType}' | summarize count()",
+            subscriptions,
+            ct);
     }
 
-    public async Task<int> CountResourceTypeAsync(string resourceType, CancellationToken ct = default)
+    private async Task<int> QueryCountAsync(
+        string query,
+        IReadOnlyList<string> subscriptions,
+        CancellationToken ct)
     {
-        var query = $"Resources | where type =~ '{resourceType}' | summarize count()";
-        var results = await QueryAsync(query, null, ct);
-        if (results.Count > 0 && results[0].Properties.TryGetValue("count_", out var count))
+        if (subscriptions.Count == 0) return 0;
+
+        var credential = new AzureIdentity::Azure.Identity.DefaultAzureCredential();
+        var token = await credential.GetTokenAsync(
+            new Azure.Core.TokenRequestContext(["https://management.azure.com/.default"]), ct);
+
+        using var client = new ResourceGraphClient(new TokenCredentials(token.Token));
+        var request = new QueryRequest(
+            subscriptions: subscriptions.ToList(),
+            query: query,
+            options: new QueryRequestOptions
+            {
+                ResultFormat = ResultFormat.ObjectArray,
+                Top = 1,
+            },
+            facets: null);
+        var response = await client.ResourcesAsync(request, ct);
+        return ParseCountQueryResult(response.Data);
+    }
+
+    public static int ParseCountQueryResult(object? data)
+    {
+        if (data is not Newtonsoft.Json.Linq.JArray rows
+            || rows.FirstOrDefault() is not Newtonsoft.Json.Linq.JObject row)
+            return 0;
+
+        var value = row.Properties()
+            .FirstOrDefault(property =>
+                property.Name.Equals("count_", StringComparison.OrdinalIgnoreCase)
+                || property.Name.Equals("count", StringComparison.OrdinalIgnoreCase))
+            ?.Value;
+        return value?.Type switch
         {
-            return Convert.ToInt32(count);
-        }
-        return 0;
+            Newtonsoft.Json.Linq.JTokenType.Integer => value.ToObject<int>(),
+            Newtonsoft.Json.Linq.JTokenType.Float => Convert.ToInt32(value.ToObject<double>()),
+            Newtonsoft.Json.Linq.JTokenType.String when int.TryParse(value.ToObject<string>(), out var parsed) => parsed,
+            _ => 0,
+        };
     }
 
     public Task<IReadOnlyList<AzureResource>> GetVNetsAsync(
@@ -137,7 +176,7 @@ public class ResourceGraphService
     /// omits subnet properties such as addressPrefix when subnets are IPAM-managed or
     /// freshly created — this gives us the authoritative property bag from ARM itself.
     /// </summary>
-    public async Task<Newtonsoft.Json.Linq.JObject?> GetArmResourceAsync(
+    public virtual async Task<Newtonsoft.Json.Linq.JObject?> GetArmResourceAsync(
         string resourceId, string apiVersion, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(resourceId) || !resourceId.StartsWith("/", StringComparison.Ordinal))

@@ -58,6 +58,7 @@ const RESOURCE_TYPE_MAP: Record<string, string> = {
   'microsoft.network/applicationgateways': ICONS.appGateway,
   'microsoft.network/virtualwans': ICONS.virtualWan,
   'microsoft.network/virtualhubs': ICONS.virtualHub,
+  'microsoft.network/virtualhubs/routingintent': ICONS.virtualHub,
   'microsoft.compute/virtualmachines': ICONS.vm,
   'microsoft.compute/virtualmachinescalesets': ICONS.vmss,
   'microsoft.containerservice/managedclusters': ICONS.aks,

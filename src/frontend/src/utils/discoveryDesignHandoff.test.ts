@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Edge, Node } from 'reactflow'
 import type { AzureResource } from '@/types/azure'
+import { validateDesign } from '@/components/designer/validation'
 import { consumeDiscoveryDesignHandoff, createDiscoveryDesignHandoff, saveDiscoveryDesignHandoff } from './discoveryDesignHandoff'
 
 describe('Discovery design handoff', () => {
@@ -59,14 +60,67 @@ describe('Discovery design handoff', () => {
 
     expect(() => saveDiscoveryDesignHandoff(handoff)).toThrow(/too large/)
   })
+
+  it('preserves Virtual WAN hierarchy, connections and Route Intent policies without false parent errors', () => {
+    const virtualWanId = '/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualWans/wan-a'
+    const hubId = '/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualHubs/hub-a'
+    const routeIntentId = `${hubId}/routingIntent/hubRoutingIntent`
+    const firewallId = '/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/azureFirewalls/firewall-a'
+    const nodes = [
+      azureNode('wan', 'wan-a', 'Microsoft.Network/virtualWans', {}, virtualWanId),
+      azureNode('hub', 'hub-a', 'Microsoft.Network/virtualHubs', {
+        addressPrefix: '10.100.0.0/23',
+        virtualWan: { id: virtualWanId },
+      }, hubId),
+      azureNode('vnet', 'spoke-a', 'Microsoft.Network/virtualNetworks'),
+      azureNode('intent', 'hubRoutingIntent', 'Microsoft.Network/virtualHubs/routingIntent', {
+        routingPolicies: [
+          { name: 'Internet', destinations: ['Internet'], nextHop: firewallId },
+          { name: 'PrivateTraffic', destinations: ['PrivateTraffic'], nextHop: firewallId },
+        ],
+      }, routeIntentId),
+      azureNode('firewall', 'firewall-a', 'Microsoft.Network/azureFirewalls', {}, firewallId),
+    ]
+    const edges: Edge[] = [
+      edge('wan-hub', 'wan', 'hub', 'contains', 'contains'),
+      edge('hub-intent', 'hub', 'intent', 'contains', 'contains'),
+      edge('vnet-hub', 'vnet', 'hub', 'connected to Virtual Hub', 'connectedTo'),
+      edge('intent-firewall', 'intent', 'firewall', 'PrivateTraffic next-hop', 'route'),
+    ]
+
+    const handoff = createDiscoveryDesignHandoff(nodes, edges)
+
+    const virtualWan = handoff.nodes.find((node) => node.data.blockType === 'Virtual WAN')!
+    const hub = handoff.nodes.find((node) => node.data.blockType === 'Virtual Hub')!
+    const intent = handoff.nodes.find((node) => node.data.blockType === 'Route Intent')!
+    expect(hub.parentId).toBe(virtualWan.id)
+    expect(intent.parentId).toBe(hub.id)
+    expect(intent.data.properties).toMatchObject({
+      virtualHubId: hubId,
+      internetTraffic: 'AzureFirewall',
+      privateTraffic: 'AzureFirewall',
+      nextHopResourceId: firewallId,
+    })
+    expect(handoff.edges).toContainEqual(expect.objectContaining({ label: 'vnet connection' }))
+    expect(handoff.edges).toContainEqual(expect.objectContaining({ label: 'next-hop' }))
+    const ruleIds = validateDesign(handoff.nodes, handoff.edges).map((finding) => finding.ruleId)
+    expect(ruleIds).not.toContain('VHub.Parent')
+    expect(ruleIds).not.toContain('RouteIntent.Parent')
+  })
 })
 
-function azureNode(id: string, name: string, type: string, properties: Record<string, unknown> = {}): Node<AzureResource> {
+function azureNode(
+  id: string,
+  name: string,
+  type: string,
+  properties: Record<string, unknown> = {},
+  resourceId = `/subscriptions/sub/resourceGroups/rg/providers/${id}`,
+): Node<AzureResource> {
   return {
     id,
     position: { x: id.length * 100, y: id.length * 30 },
     data: {
-      id: `/subscriptions/sub/resourceGroups/rg/providers/${id}`,
+      id: resourceId,
       type,
       name,
       subscriptionId: 'sub',

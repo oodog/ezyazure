@@ -75,12 +75,12 @@ export interface FlowEdge {
 }
 
 export interface DashboardStats {
-  subscriptionCount: number
-  vnetCount: number
-  resourceCount: number
+  subscriptionCount: number | null
+  vnetCount: number | null
+  resourceCount: number | null
   complianceScore: number | null
-  driftWarnings: number
-  recentDeployments: number
+  driftWarnings: number | null
+  recentDeployments: number | null
   recentDeploymentList?: { id: string; name: string; status: string }[]
   driftList?: { resourceId: string; message: string }[]
 }

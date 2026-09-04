@@ -1,5 +1,8 @@
 using EasyAzure.Core.Models;
+using EasyAzure.Discovery.Services;
 using EasyAzure.Topology.Services;
+using Microsoft.Extensions.Logging.Abstractions;
+using Newtonsoft.Json.Linq;
 
 namespace EasyAzure.Tests;
 
@@ -130,6 +133,273 @@ public class TopologyRelationshipTests
         Assert.Contains("networkSecurityGroup", nicToNsg.Metadata?["propertyPath"]);
     }
 
+    [Fact]
+    public void BuildEdges_HubVirtualNetworkConnection_ConnectsVnetToParentHub()
+    {
+        var hubId = ResourceId("Microsoft.Network/virtualHubs/hub-a");
+        var vnetId = ResourceId("Microsoft.Network/virtualNetworks/spoke-a");
+        var connection = Resource(
+            $"{hubId}/hubVirtualNetworkConnections/spoke-a",
+            "Microsoft.Network/virtualHubs/hubVirtualNetworkConnections",
+            new Dictionary<string, object>
+            {
+                ["provisioningState"] = "Succeeded",
+                ["remoteVirtualNetwork"] = new Dictionary<string, object> { ["id"] = vnetId },
+            });
+        var resources = new List<AzureResource>
+        {
+            Resource(hubId, "Microsoft.Network/virtualHubs"),
+            Resource(vnetId, "Microsoft.Network/virtualNetworks"),
+            connection,
+        };
+
+        var edges = TopologyService.BuildEdges(resources, []);
+
+        var edge = Assert.Single(edges, candidate => candidate.Source == vnetId && candidate.Target == hubId);
+        Assert.Equal(FlowEdgeCategory.ConnectedTo, edge.Category);
+        Assert.Contains("Virtual Hub", edge.Label);
+        Assert.Equal("hubVirtualNetworkConnection", edge.Metadata?["relationship"]);
+        Assert.Equal(connection.Id, edge.Metadata?["connectionId"]);
+    }
+
+    [Fact]
+    public void BuildEdges_VirtualWanRoutingIntent_CreatesHierarchyAndPolicyRoutes()
+    {
+        var virtualWanId = ResourceId("Microsoft.Network/virtualWans/wan-a");
+        var hubId = ResourceId("Microsoft.Network/virtualHubs/hub-a");
+        var firewallId = ResourceId("Microsoft.Network/azureFirewalls/firewall-a");
+        var routingIntentId = $"{hubId}/routingIntent/hubRoutingIntent";
+        var hub = Resource(
+            hubId,
+            "Microsoft.Network/virtualHubs",
+            new Dictionary<string, object>
+            {
+                ["virtualWan"] = new Dictionary<string, object> { ["id"] = virtualWanId },
+            });
+        var routingIntent = Resource(
+            routingIntentId,
+            "Microsoft.Network/virtualHubs/routingIntent",
+            new Dictionary<string, object>
+            {
+                ["routingPolicies"] = new List<object>
+                {
+                    new Dictionary<string, object>
+                    {
+                        ["name"] = "Internet",
+                        ["destinations"] = new List<object> { "Internet" },
+                        ["nextHop"] = firewallId,
+                    },
+                    new Dictionary<string, object>
+                    {
+                        ["name"] = "PrivateTraffic",
+                        ["destinations"] = new List<object> { "PrivateTraffic" },
+                        ["nextHop"] = firewallId,
+                    },
+                },
+            });
+        var resources = new List<AzureResource>
+        {
+            Resource(virtualWanId, "Microsoft.Network/virtualWans"),
+            hub,
+            routingIntent,
+            Resource(firewallId, "Microsoft.Network/azureFirewalls"),
+        };
+
+        var edges = TopologyService.BuildEdges(resources, []);
+
+        Assert.Contains(edges, edge =>
+            edge.Source == virtualWanId
+            && edge.Target == hubId
+            && edge.Category == FlowEdgeCategory.Contains);
+        Assert.Contains(edges, edge =>
+            edge.Source == hubId
+            && edge.Target == routingIntentId
+            && edge.Category == FlowEdgeCategory.Contains);
+        var policyRoutes = edges.Where(edge =>
+            edge.Source == routingIntentId
+            && edge.Target == firewallId).ToList();
+        Assert.Equal(2, policyRoutes.Count);
+        Assert.Contains(policyRoutes, edge =>
+            edge.Metadata?["destinations"] == "Internet"
+            && edge.Category == FlowEdgeCategory.DefaultRoute);
+        Assert.Contains(policyRoutes, edge =>
+            edge.Metadata?["destinations"] == "PrivateTraffic"
+            && edge.Category == FlowEdgeCategory.Route);
+        Assert.DoesNotContain(edges, edge =>
+            edge.Source == hubId
+            && edge.Target == virtualWanId
+            && edge.Metadata?["relationship"] == "armReference");
+    }
+
+    [Fact]
+    public async Task BuildTopology_ResourceGraphOmitsVwanChildren_HydratesThemFromArmCollections()
+    {
+        var virtualWanId = ResourceId("Microsoft.Network/virtualWans/wan-a");
+        var hubId = ResourceId("Microsoft.Network/virtualHubs/hub-a");
+        var vnetId = ResourceId("Microsoft.Network/virtualNetworks/spoke-a");
+        var firewallId = ResourceId("Microsoft.Network/azureFirewalls/firewall-a");
+        var connectionId = $"{hubId}/hubVirtualNetworkConnections/spoke-a";
+        var routingIntentId = $"{hubId}/routingIntent/hubRoutingIntent";
+        var inventory = new List<AzureResource>
+        {
+            Resource(virtualWanId, "Microsoft.Network/virtualWans"),
+            Resource(
+                hubId,
+                "Microsoft.Network/virtualHubs",
+                new Dictionary<string, object>
+                {
+                    ["virtualWan"] = new Dictionary<string, object> { ["id"] = virtualWanId },
+                }),
+            Resource(vnetId, "Microsoft.Network/virtualNetworks"),
+            Resource(firewallId, "Microsoft.Network/azureFirewalls"),
+        };
+        var armResponses = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase)
+        {
+            [$"{hubId}/hubVirtualNetworkConnections"] = JObject.Parse($$"""
+                { "value": [{ "id": "{{connectionId}}", "name": "spoke-a", "type": "Microsoft.Network/virtualHubs/hubVirtualNetworkConnections", "properties": { "provisioningState": "Succeeded", "remoteVirtualNetwork": { "id": "{{vnetId}}" } } }] }
+                """),
+            [$"{hubId}/routingIntent"] = JObject.Parse($$"""
+                { "value": [{ "id": "{{routingIntentId}}", "name": "hubRoutingIntent", "type": "Microsoft.Network/virtualHubs/routingIntent", "properties": { "provisioningState": "Succeeded", "routingPolicies": [{ "name": "PrivateTraffic", "destinations": ["PrivateTraffic"], "nextHop": "{{firewallId}}" }] } }] }
+                """),
+        };
+        var topology = new TopologyService(
+            new StubResourceGraphService(inventory, armResponses),
+            NullLogger<TopologyService>.Instance);
+
+        var graph = await topology.BuildTopologyAsync(SubscriptionId);
+
+        Assert.Contains(graph.Nodes, node => node.Id == connectionId);
+        Assert.Contains(graph.Nodes, node => node.Id == routingIntentId);
+        Assert.Contains(graph.Edges, edge => edge.Source == vnetId && edge.Target == hubId);
+        Assert.Contains(graph.Edges, edge =>
+            edge.Source == routingIntentId
+            && edge.Target == firewallId
+            && edge.Metadata?["destinations"] == "PrivateTraffic");
+    }
+
+    [Fact]
+    public void BuildEdges_InternetRoutingIntent_ReplacesDirectSystemDefaultWithSecuredHubPath()
+    {
+        var virtualWanId = ResourceId("Microsoft.Network/virtualWans/wan-a");
+        var hubId = ResourceId("Microsoft.Network/virtualHubs/hub-a");
+        var vnetId = ResourceId("Microsoft.Network/virtualNetworks/spoke-a");
+        var subnetId = $"{vnetId}/subnets/default";
+        var firewallId = ResourceId("Microsoft.Network/azureFirewalls/firewall-a");
+        var routingIntentId = $"{hubId}/routingIntent/hubRoutingIntent";
+        var resources = new List<AzureResource>
+        {
+            Resource(virtualWanId, "Microsoft.Network/virtualWans"),
+            Resource(hubId, "Microsoft.Network/virtualHubs", new Dictionary<string, object>
+            {
+                ["virtualWan"] = new Dictionary<string, object> { ["id"] = virtualWanId },
+            }),
+            Resource(vnetId, "Microsoft.Network/virtualNetworks"),
+            Resource(subnetId, "Microsoft.Network/virtualNetworks/subnets"),
+            Resource(firewallId, "Microsoft.Network/azureFirewalls"),
+            Resource(
+                $"{hubId}/hubVirtualNetworkConnections/spoke-a",
+                "Microsoft.Network/virtualHubs/hubVirtualNetworkConnections",
+                new Dictionary<string, object>
+                {
+                    ["provisioningState"] = "Succeeded",
+                    ["enableInternetSecurity"] = true,
+                    ["remoteVirtualNetwork"] = new Dictionary<string, object> { ["id"] = vnetId },
+                }),
+            Resource(
+                routingIntentId,
+                "Microsoft.Network/virtualHubs/routingIntent",
+                new Dictionary<string, object>
+                {
+                    ["provisioningState"] = "Succeeded",
+                    ["routingPolicies"] = new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            ["name"] = "Internet",
+                            ["destinations"] = new List<object> { "Internet" },
+                            ["nextHop"] = firewallId,
+                        },
+                    },
+                }),
+        };
+
+        var edges = TopologyService.BuildEdges(resources, []);
+
+        Assert.DoesNotContain(edges, edge =>
+            edge.Source == subnetId
+            && edge.Target == "easyazure://internet");
+        var subnetToHub = Assert.Single(edges, edge =>
+            edge.Source == subnetId
+            && edge.Target == hubId
+            && edge.Category == FlowEdgeCategory.DefaultRoute);
+        Assert.Equal("vwanRoutingIntent", subnetToHub.Metadata?["source"]);
+        Assert.Contains(edges, edge =>
+            edge.Source == routingIntentId
+            && edge.Target == firewallId
+            && edge.Category == FlowEdgeCategory.DefaultRoute);
+        Assert.Contains(edges, edge =>
+            edge.Source == firewallId
+            && edge.Target == "easyazure://internet"
+            && edge.Category == FlowEdgeCategory.DefaultRoute);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void BuildEdges_InternetRoutingIntentNotApplied_KeepsDirectSystemDefault(
+        bool enableInternetSecurity,
+        bool includeInternetPolicy)
+    {
+        var hubId = ResourceId("Microsoft.Network/virtualHubs/hub-a");
+        var vnetId = ResourceId("Microsoft.Network/virtualNetworks/spoke-a");
+        var subnetId = $"{vnetId}/subnets/default";
+        var firewallId = ResourceId("Microsoft.Network/azureFirewalls/firewall-a");
+        var resources = new List<AzureResource>
+        {
+            Resource(hubId, "Microsoft.Network/virtualHubs"),
+            Resource(vnetId, "Microsoft.Network/virtualNetworks"),
+            Resource(subnetId, "Microsoft.Network/virtualNetworks/subnets"),
+            Resource(firewallId, "Microsoft.Network/azureFirewalls"),
+            Resource(
+                $"{hubId}/hubVirtualNetworkConnections/spoke-a",
+                "Microsoft.Network/virtualHubs/hubVirtualNetworkConnections",
+                new Dictionary<string, object>
+                {
+                    ["enableInternetSecurity"] = enableInternetSecurity,
+                    ["remoteVirtualNetwork"] = new Dictionary<string, object> { ["id"] = vnetId },
+                }),
+        };
+        if (includeInternetPolicy)
+        {
+            resources.Add(Resource(
+                $"{hubId}/routingIntent/hubRoutingIntent",
+                "Microsoft.Network/virtualHubs/routingIntent",
+                new Dictionary<string, object>
+                {
+                    ["routingPolicies"] = new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            ["name"] = "Internet",
+                            ["destinations"] = new List<object> { "Internet" },
+                            ["nextHop"] = firewallId,
+                        },
+                    },
+                }));
+        }
+
+        var edges = TopologyService.BuildEdges(resources, []);
+
+        Assert.Contains(edges, edge =>
+            edge.Source == subnetId
+            && edge.Target == "easyazure://internet"
+            && edge.Metadata?["source"] == "system");
+        Assert.DoesNotContain(edges, edge =>
+            edge.Source == subnetId
+            && edge.Target == hubId
+            && edge.Metadata?["source"] == "vwanRoutingIntent");
+    }
+
     private static AzureResource Resource(
         string id,
         string type,
@@ -147,4 +417,21 @@ public class TopologyRelationshipTests
 
     private static string ResourceId(string suffix) =>
         $"/subscriptions/{SubscriptionId}/resourceGroups/{ResourceGroup}/providers/{suffix}";
+
+    private sealed class StubResourceGraphService(
+        IReadOnlyList<AzureResource> resources,
+        IReadOnlyDictionary<string, JObject> armResponses)
+        : ResourceGraphService(NullLogger<ResourceGraphService>.Instance)
+    {
+        public override Task<IReadOnlyList<AzureResource>> GetAllResourcesAsync(
+            string subscriptionId,
+            CancellationToken ct = default) =>
+            Task.FromResult(resources);
+
+        public override Task<JObject?> GetArmResourceAsync(
+            string resourceId,
+            string apiVersion,
+            CancellationToken ct = default) =>
+            Task.FromResult(armResponses.GetValueOrDefault(resourceId));
+    }
 }

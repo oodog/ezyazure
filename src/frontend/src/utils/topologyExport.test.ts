@@ -41,7 +41,8 @@ describe('topology export', () => {
       sourceId: 'node-2',
       targetId: 'node-3',
     }))
-    expect(xml).toContain('Hub &amp; Spoke VNet')
+    expect(hints).toContainEqual(expect.objectContaining({ label: 'Hub & Spoke VNet virtualNetworks australiaeast' }))
+    expect(xml).toContain('&lt;b&gt;Hub &amp;amp; Spoke VNet&lt;/b&gt;')
     expect(xml).toContain('easyazureResourceType="Microsoft.Network/privateEndpoints"')
     expect(xml).not.toContain('<parsererror')
   })
@@ -70,6 +71,20 @@ describe('topology export', () => {
 
     expect(xml).toContain('pageWidth="2100"')
     expect(xml).toContain('pageHeight="1080"')
+  })
+
+  it('shows the VM name and private IP clearly in draw.io', () => {
+    const vm = resourceNode('vm', 'VirtualMachine1', 'Microsoft.Compute/virtualMachines', 20, 30)
+    vm.data.properties = { privateIPAddresses: ['10.0.2.4'] }
+
+    const xml = createDrawioXml([vm], [])
+    const document = new DOMParser().parseFromString(xml, 'application/xml')
+    const label = document.querySelector('mxCell[easyazureResourceType="Microsoft.Compute/virtualMachines"]')
+      ?.getAttribute('value')
+
+    expect(label).toContain('<b>VirtualMachine1</b>')
+    expect(label).toContain('Private IP: <b>10.0.2.4</b>')
+    expect(label?.indexOf('VirtualMachine1')).toBeLessThan(label?.indexOf('10.0.2.4') ?? 0)
   })
 
   it('builds a dated, filesystem-safe filename', () => {

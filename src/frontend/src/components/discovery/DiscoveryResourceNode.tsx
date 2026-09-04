@@ -46,6 +46,8 @@ function categorise(type: string): { label: string; accent: string } {
     return { label: 'Virtual WAN', accent: '#4f46e5' }
   if (t === 'microsoft.network/virtualhubs')
     return { label: 'Virtual Hub', accent: '#6366f1' }
+  if (t === 'microsoft.network/virtualhubs/routingintent')
+    return { label: 'Route Intent', accent: '#b45309' }
   if (t === 'microsoft.network/vpngateways')
     return { label: 'VPN Gateway', accent: '#7c3aed' }
   if (t === 'microsoft.network/vpnsites')

@@ -32,32 +32,42 @@ public class DiscoveryService : IDiscoveryService
         // Each tile is fetched independently so a single failure (missing RBAC,
         // network blip, transient Resource Graph error) downgrades the affected
         // metric to zero rather than failing the entire dashboard request.
-        var subscriptionCount = 0;
+        int? subscriptionCount = null;
+        IReadOnlyList<SubscriptionSummary> subscriptions = [];
         try
         {
-            var subscriptions = await ListSubscriptionsAsync(ct);
+            subscriptions = await ListSubscriptionsAsync(ct);
             subscriptionCount = subscriptions.Count;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Dashboard: listing subscriptions failed; defaulting to 0.");
+            _logger.LogWarning(ex, "Dashboard: listing subscriptions failed; metric is unavailable.");
         }
 
-        var resourceCount = 0;
-        try { resourceCount = await _resourceGraph.CountAllResourcesAsync(ct); }
-        catch (Exception ex) { _logger.LogWarning(ex, "Dashboard: counting resources failed; defaulting to 0."); }
+        int? resourceCount = null;
+        var subscriptionIds = subscriptions
+            .Select(subscription => subscription.Id)
+            .Where(subscriptionId => !string.IsNullOrWhiteSpace(subscriptionId))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (subscriptionCount is not null)
+        {
+            try { resourceCount = await _resourceGraph.CountAllResourcesAsync(subscriptionIds, ct); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Dashboard: counting resources failed; metric is unavailable."); }
+        }
 
-        var vnetCount = 0;
-        try { vnetCount = await _resourceGraph.CountResourceTypeAsync("Microsoft.Network/virtualNetworks", ct); }
-        catch (Exception ex) { _logger.LogWarning(ex, "Dashboard: counting VNets failed; defaulting to 0."); }
+        int? vnetCount = null;
+        if (subscriptionCount is not null)
+        {
+            try { vnetCount = await _resourceGraph.CountResourceTypeAsync("Microsoft.Network/virtualNetworks", subscriptionIds, ct); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Dashboard: counting VNets failed; metric is unavailable."); }
+        }
 
         return new DashboardStats
         {
             SubscriptionCount = subscriptionCount,
             ResourceCount = resourceCount,
             VNetCount = vnetCount,
-            DriftWarnings = 0,
-            RecentDeployments = 0,
         };
     }
 

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace EasyAzure.Core.Models;
 
 /// <summary>
@@ -101,12 +103,13 @@ public record SubscriptionSummary(string Id, string DisplayName, string TenantId
 
 public record DashboardStats
 {
-    public int SubscriptionCount { get; init; }
-    public int VNetCount { get; init; }
-    public int ResourceCount { get; init; }
+    public int? SubscriptionCount { get; init; }
+    [JsonPropertyName("vnetCount")]
+    public int? VNetCount { get; init; }
+    public int? ResourceCount { get; init; }
     public double? ComplianceScore { get; init; }
-    public int DriftWarnings { get; init; }
-    public int RecentDeployments { get; init; }
+    public int? DriftWarnings { get; init; }
+    public int? RecentDeployments { get; init; }
     public IReadOnlyList<DeploymentSummary> RecentDeploymentList { get; init; } = [];
     public IReadOnlyList<DriftWarning> DriftList { get; init; } = [];
 }

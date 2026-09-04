@@ -157,6 +157,7 @@ function blockTypeFor(resource: AzureResource): string | null {
   if (type === 'microsoft.network/applicationgateways') return 'Application Gateway'
   if (type === 'microsoft.network/virtualwans') return 'Virtual WAN'
   if (type === 'microsoft.network/virtualhubs') return 'Virtual Hub'
+  if (type === 'microsoft.network/virtualhubs/routingintent') return 'Route Intent'
   if (type === 'microsoft.network/bastionhosts') return 'Bastion'
   if (type === 'microsoft.compute/virtualmachines') return 'VM'
   if (type === 'microsoft.compute/virtualmachinescalesets') return 'VM Scale Set'
@@ -187,6 +188,14 @@ function designProperties(resource: AzureResource, blockType: string): Record<st
     properties.addressPrefix = getSubnetPrefixes(resource)[0] ?? ''
     properties.privateEndpointPolicies = resource.properties.privateEndpointNetworkPolicies ?? 'Disabled'
   }
+  if (blockType === 'Virtual Hub') {
+    properties.addressPrefix = resource.properties.addressPrefix ?? ''
+    properties.virtualWanId = referenceId(resource.properties.virtualWan) ?? ''
+    properties.sku = resource.properties.sku ?? 'Standard'
+  }
+  if (blockType === 'Route Intent') {
+    Object.assign(properties, routeIntentProperties(resource))
+  }
   if (blockType === 'Private Endpoint')
     properties.privateIpAddress = getVmPrivateIps(resource)[0] ?? ''
   if (blockType === 'Storage Account') {
@@ -201,4 +210,45 @@ function designProperties(resource: AzureResource, blockType: string): Record<st
 
 function isSubnetAssociation(source: Node<DesignBlock>, target: Node<DesignBlock>): boolean {
   return source.data.blockType === 'Subnet' || target.data.blockType === 'Subnet'
+}
+
+function routeIntentProperties(resource: AzureResource): Record<string, unknown> {
+  const policies = Array.isArray(resource.properties.routingPolicies)
+    ? resource.properties.routingPolicies.filter(isRecord)
+    : []
+  const result: Record<string, unknown> = {
+    virtualHubId: parentResourceId(resource.id, '/routingIntent/') ?? '',
+    internetTraffic: 'None',
+    privateTraffic: 'None',
+  }
+
+  for (const policy of policies) {
+    const destinations = Array.isArray(policy.destinations)
+      ? policy.destinations.map(String)
+      : []
+    const nextHop = typeof policy.nextHop === 'string' ? policy.nextHop : ''
+    const nextHopType = nextHop.toLowerCase().includes('/networkvirtualappliances/')
+      ? 'NVA'
+      : 'AzureFirewall'
+    if (destinations.some((destination) => destination.toLowerCase() === 'internet'))
+      result.internetTraffic = nextHopType
+    if (destinations.some((destination) => destination.toLowerCase() === 'privatetraffic'))
+      result.privateTraffic = nextHopType
+    if (nextHop) result.nextHopResourceId = nextHop
+  }
+
+  return result
+}
+
+function referenceId(value: unknown): string | undefined {
+  return isRecord(value) && typeof value.id === 'string' ? value.id : undefined
+}
+
+function parentResourceId(resourceId: string, childSegment: string): string | undefined {
+  const index = resourceId.toLowerCase().indexOf(childSegment.toLowerCase())
+  return index > 0 ? resourceId.slice(0, index) : undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

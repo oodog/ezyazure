@@ -78,6 +78,7 @@ public class TopologyService : ITopologyService
         allResources = ConsolidateResources(allResources);
         await EnrichSubnetsFromArmAsync(allResources, ct);
         await EnrichRouteTablesFromArmAsync(allResources, ct);
+        await EnrichVirtualHubsFromArmAsync(allResources, ct);
         EnrichVmPrivateIps(allResources, networkInterfaces);
         EnrichFirewallPrivateIps(allResources);
         EnsureInternetNode(allResources);
@@ -102,6 +103,73 @@ public class TopologyService : ITopologyService
         // Placeholder returns empty for now.
         await Task.CompletedTask;
         return [];
+    }
+
+    private async Task EnrichVirtualHubsFromArmAsync(List<AzureResource> resources, CancellationToken ct)
+    {
+        var hubs = resources
+            .Where(resource => string.Equals(
+                resource.Type,
+                "Microsoft.Network/virtualHubs",
+                StringComparison.OrdinalIgnoreCase))
+            .Where(resource => !string.IsNullOrWhiteSpace(resource.Id) && resource.Id.StartsWith("/", StringComparison.Ordinal))
+            .ToList();
+
+        if (hubs.Count == 0) return;
+
+        _logger.LogInformation("Enriching {Count} Virtual Hub(s) from ARM REST", hubs.Count);
+
+        var fetches = hubs.Select(async hub =>
+        {
+            var children = new List<AzureResource>();
+            foreach (var childCollection in new[] { "hubVirtualNetworkConnections", "routingIntent" })
+            {
+                var response = await _resourceGraph.GetArmResourceAsync(
+                    $"{hub.Id.TrimEnd('/')}/{childCollection}",
+                    "2024-05-01",
+                    ct);
+                if (response?["value"] is not JArray items) continue;
+
+                foreach (var item in items.OfType<JObject>())
+                {
+                    var child = CreateArmChildResource(item, hub);
+                    if (child is not null) children.Add(child);
+                }
+            }
+
+            return children;
+        }).ToArray();
+
+        var discoveredChildren = (await Task.WhenAll(fetches)).SelectMany(children => children).ToList();
+        if (discoveredChildren.Count == 0) return;
+
+        resources.AddRange(discoveredChildren);
+        var consolidated = ConsolidateResources(resources);
+        resources.Clear();
+        resources.AddRange(consolidated);
+    }
+
+    private static AzureResource? CreateArmChildResource(JObject item, AzureResource parent)
+    {
+        var id = item["id"]?.Value<string>();
+        var name = item["name"]?.Value<string>();
+        var type = item["type"]?.Value<string>();
+        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(type))
+            return null;
+
+        return new AzureResource
+        {
+            Id = id,
+            Name = name,
+            Type = type,
+            Location = item["location"]?.Value<string>() ?? parent.Location,
+            ResourceGroup = parent.ResourceGroup,
+            SubscriptionId = parent.SubscriptionId,
+            Properties = ResourceGraphService.NormalizeJTokenToNative(item["properties"])
+                as Dictionary<string, object>
+                ?? new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase),
+            Tags = item["tags"]?.ToObject<Dictionary<string, string>>() ?? [],
+        };
     }
 
     private async Task EnrichSubnetsFromArmAsync(List<AzureResource> resources, CancellationToken ct)
@@ -747,6 +815,7 @@ public class TopologyService : ITopologyService
             .Where(r => r.Type.Equals("Microsoft.Network/routeTables", StringComparison.OrdinalIgnoreCase))
             .ToList();
         var firewallIpIndex = BuildFirewallPrivateIpIndex(resources);
+        var vwanInternetRoutes = BuildVwanInternetRouteIndex(resources);
 
         void Emit(FlowEdge e)
         {
@@ -759,6 +828,15 @@ public class TopologyService : ITopologyService
             {
                 case "microsoft.network/virtualnetworks":
                     AddVNetEdges(resource, Emit);
+                    break;
+                case "microsoft.network/virtualhubs":
+                    AddVirtualHubEdges(resource, Emit);
+                    break;
+                case "microsoft.network/virtualhubs/hubvirtualnetworkconnections":
+                    AddHubVirtualNetworkConnectionEdges(resource, Emit);
+                    break;
+                case "microsoft.network/virtualhubs/routingintent":
+                    AddRoutingIntentEdges(resource, byId, Emit);
                     break;
                 case "microsoft.network/virtualnetworks/subnets":
                     AddSubnetEdges(resource, byId, Emit);
@@ -941,6 +1019,28 @@ public class TopologyService : ITopologyService
             EnsureInternetNode(resources);
             foreach (var subnet in subnetsForSystemDefault)
             {
+                var vnetId = ParentResourceId(subnet.Id, "/subnets/");
+                if (vnetId is not null && vwanInternetRoutes.TryGetValue(vnetId, out var vwanRoute))
+                {
+                    Emit(new FlowEdge(
+                        Id: $"vwan-default|{subnet.Id}|{vwanRoute.HubId}",
+                        Source: subnet.Id,
+                        Target: vwanRoute.HubId,
+                        Label: "0.0.0.0/0 → Virtual Hub (routing intent)",
+                        Category: FlowEdgeCategory.DefaultRoute,
+                        Metadata: new Dictionary<string, string>
+                        {
+                            ["addressPrefix"] = "0.0.0.0/0",
+                            ["nextHopType"] = "VirtualHub",
+                            ["routeName"] = vwanRoute.PolicyName,
+                            ["source"] = "vwanRoutingIntent",
+                            ["connectionId"] = vwanRoute.ConnectionId,
+                            ["routingIntentId"] = vwanRoute.RoutingIntentId,
+                            ["nextHopResourceId"] = vwanRoute.NextHopId,
+                        }));
+                    continue;
+                }
+
                 // If the subnet has an NSG, label that the egress passes through it.
                 var nsgId = TryGetReferenceId(subnet.Properties, "networkSecurityGroup");
                 var label = string.IsNullOrEmpty(nsgId)
@@ -1019,6 +1119,217 @@ public class TopologyService : ITopologyService
                     Category: FlowEdgeCategory.Peering));
             }
         }
+    }
+
+    private static void AddHubVirtualNetworkConnectionEdges(
+        AzureResource connection,
+        Action<FlowEdge> emit)
+    {
+        const string childSegment = "/hubVirtualNetworkConnections/";
+        var childIndex = connection.Id.IndexOf(childSegment, StringComparison.OrdinalIgnoreCase);
+        if (childIndex <= 0) return;
+
+        var hubId = connection.Id[..childIndex].TrimEnd('/');
+        var vnetId = TryGetReferenceId(connection.Properties, "remoteVirtualNetwork")?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(vnetId)) return;
+
+        var state = TryGetString(connection.Properties, "provisioningState");
+        emit(new FlowEdge(
+            Id: $"vwan-connection|{vnetId}|{hubId}",
+            Source: vnetId,
+            Target: hubId,
+            Label: string.IsNullOrWhiteSpace(state)
+                ? "connected to Virtual Hub"
+                : $"connected to Virtual Hub ({state})",
+            Category: FlowEdgeCategory.ConnectedTo,
+            Metadata: new Dictionary<string, string>
+            {
+                ["relationship"] = "hubVirtualNetworkConnection",
+                ["connectionId"] = connection.Id,
+                ["provisioningState"] = state ?? string.Empty,
+            }));
+    }
+
+    private static void AddVirtualHubEdges(AzureResource hub, Action<FlowEdge> emit)
+    {
+        var virtualWanId = TryGetReferenceId(hub.Properties, "virtualWan")?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(virtualWanId)) return;
+
+        emit(new FlowEdge(
+            Id: $"contains|{virtualWanId}|{hub.Id}",
+            Source: virtualWanId,
+            Target: hub.Id,
+            Label: "contains",
+            Category: FlowEdgeCategory.Contains,
+            Metadata: new Dictionary<string, string>
+            {
+                ["relationship"] = "virtualWanHub",
+            }));
+    }
+
+    private static void AddRoutingIntentEdges(
+        AzureResource routingIntent,
+        IReadOnlyDictionary<string, AzureResource> resourcesById,
+        Action<FlowEdge> emit)
+    {
+        const string childSegment = "/routingIntent/";
+        var childIndex = routingIntent.Id.IndexOf(childSegment, StringComparison.OrdinalIgnoreCase);
+        if (childIndex <= 0) return;
+
+        var hubId = routingIntent.Id[..childIndex].TrimEnd('/');
+        emit(new FlowEdge(
+            Id: $"contains|{hubId}|{routingIntent.Id}",
+            Source: hubId,
+            Target: routingIntent.Id,
+            Label: "contains",
+            Category: FlowEdgeCategory.Contains,
+            Metadata: new Dictionary<string, string>
+            {
+                ["relationship"] = "routingIntent",
+            }));
+
+        if (!TryGetValueCaseInsensitive(routingIntent.Properties, "routingPolicies", out var rawPolicies)
+            || rawPolicies is null)
+            return;
+
+        IEnumerable<object> policies = rawPolicies switch
+        {
+            JArray array => array.Cast<object>(),
+            IEnumerable<object> native => native,
+            _ => [],
+        };
+        foreach (var rawPolicy in policies)
+        {
+            var policy = rawPolicy switch
+            {
+                JObject json => ResourceGraphService.NormalizeJTokenToNative(json) as IDictionary<string, object>,
+                IDictionary<string, object> native => native,
+                _ => null,
+            };
+            if (policy is null) continue;
+
+            var policyName = TryGetString(policy, "name") ?? "policy";
+            var nextHopId = TryGetString(policy, "nextHop")?.TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(nextHopId) || !resourcesById.ContainsKey(nextHopId)) continue;
+
+            var destinations = ReadStringList(policy, "destinations");
+            var isInternetPolicy = destinations.Any(destination =>
+                destination.Equals("Internet", StringComparison.OrdinalIgnoreCase));
+            emit(new FlowEdge(
+                Id: $"routing-intent|{routingIntent.Id}|{policyName}|{nextHopId}",
+                Source: routingIntent.Id,
+                Target: nextHopId,
+                Label: destinations.Count == 0
+                    ? $"{policyName} next-hop"
+                    : $"{string.Join(", ", destinations)} next-hop",
+                Category: isInternetPolicy ? FlowEdgeCategory.DefaultRoute : FlowEdgeCategory.Route,
+                Metadata: new Dictionary<string, string>
+                {
+                    ["relationship"] = "routingIntentPolicy",
+                    ["policyName"] = policyName,
+                    ["destinations"] = string.Join(",", destinations),
+                    ["nextHopResourceId"] = nextHopId,
+                }));
+
+            if (isInternetPolicy)
+            {
+                emit(new FlowEdge(
+                    Id: $"routing-intent-egress|{nextHopId}|{InternetNodeId}",
+                    Source: nextHopId,
+                    Target: InternetNodeId,
+                    Label: "Internet egress after inspection",
+                    Category: FlowEdgeCategory.DefaultRoute,
+                    Metadata: new Dictionary<string, string>
+                    {
+                        ["addressPrefix"] = "0.0.0.0/0",
+                        ["nextHopType"] = "Internet",
+                        ["routeName"] = policyName,
+                        ["source"] = "vwanRoutingIntent",
+                        ["routingIntentId"] = routingIntent.Id,
+                    }));
+            }
+        }
+    }
+
+    private static Dictionary<string, VwanInternetRoute> BuildVwanInternetRouteIndex(
+        IReadOnlyList<AzureResource> resources)
+    {
+        var internetPolicyByHub = new Dictionary<string, (string IntentId, string NextHopId, string PolicyName)>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var intent in resources.Where(resource => resource.Type.Equals(
+                     "Microsoft.Network/virtualHubs/routingIntent",
+                     StringComparison.OrdinalIgnoreCase)))
+        {
+            var hubId = ParentResourceId(intent.Id, "/routingIntent/");
+            if (hubId is null
+                || !TryGetValueCaseInsensitive(intent.Properties, "routingPolicies", out var rawPolicies)
+                || rawPolicies is null)
+                continue;
+
+            foreach (var policy in ReadObjectList(rawPolicies))
+            {
+                if (!ReadStringList(policy, "destinations").Any(destination =>
+                        destination.Equals("Internet", StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
+                var nextHopId = TryGetString(policy, "nextHop")?.TrimEnd('/');
+                if (string.IsNullOrWhiteSpace(nextHopId)) continue;
+                internetPolicyByHub[hubId] = (
+                    intent.Id,
+                    nextHopId,
+                    TryGetString(policy, "name") ?? "Internet");
+                break;
+            }
+        }
+
+        var routes = new Dictionary<string, VwanInternetRoute>(StringComparer.OrdinalIgnoreCase);
+        foreach (var connection in resources.Where(resource => resource.Type.Equals(
+                     "Microsoft.Network/virtualHubs/hubVirtualNetworkConnections",
+                     StringComparison.OrdinalIgnoreCase)))
+        {
+            var hubId = ParentResourceId(connection.Id, "/hubVirtualNetworkConnections/");
+            var vnetId = TryGetReferenceId(connection.Properties, "remoteVirtualNetwork")?.TrimEnd('/');
+            if (hubId is null
+                || string.IsNullOrWhiteSpace(vnetId)
+                || !TryGetBoolean(connection.Properties, "enableInternetSecurity")
+                || !internetPolicyByHub.TryGetValue(hubId, out var policy))
+                continue;
+
+            routes[vnetId] = new VwanInternetRoute(
+                hubId,
+                policy.IntentId,
+                policy.NextHopId,
+                policy.PolicyName,
+                connection.Id);
+        }
+
+        return routes;
+    }
+
+    private static IEnumerable<IDictionary<string, object>> ReadObjectList(object raw) => raw switch
+    {
+        JArray array => array
+            .OfType<JObject>()
+            .Select(item => ResourceGraphService.NormalizeJTokenToNative(item))
+            .OfType<IDictionary<string, object>>(),
+        IEnumerable<object> native => native.OfType<IDictionary<string, object>>(),
+        _ => [],
+    };
+
+    private static IReadOnlyList<string> ReadStringList(IDictionary<string, object> dictionary, string key)
+    {
+        if (!TryGetValueCaseInsensitive(dictionary, key, out var raw) || raw is null) return [];
+        var items = raw switch
+        {
+            JArray array => array.Cast<object>(),
+            IEnumerable<object> native => native,
+            _ => [],
+        };
+        return items
+            .Select(item => item is JValue value ? value.Value<string>() : item?.ToString())
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Select(item => item!)
+            .ToList();
     }
 
     private static void AddSubnetEdges(AzureResource subnet, Dictionary<string, AzureResource> byId, Action<FlowEdge> emit)
@@ -1141,6 +1452,7 @@ public class TopologyService : ITopologyService
         {
             if (string.Equals(resource.Id, targetId, StringComparison.OrdinalIgnoreCase)) continue;
             if (!resourcesById.ContainsKey(targetId)) continue;
+            if (HasCanonicalVwanRelationship(resource.Type, resourcesById[targetId].Type)) continue;
 
             emit(new FlowEdge(
                 Id: $"reference|{resource.Id}|{targetId}",
@@ -1155,6 +1467,13 @@ public class TopologyService : ITopologyService
                 }));
         }
     }
+
+    private static bool HasCanonicalVwanRelationship(string sourceType, string targetType) =>
+        (sourceType.Equals("Microsoft.Network/virtualHubs", StringComparison.OrdinalIgnoreCase)
+            && targetType.Equals("Microsoft.Network/virtualWans", StringComparison.OrdinalIgnoreCase))
+        || (sourceType.Equals("Microsoft.Network/virtualHubs/hubVirtualNetworkConnections", StringComparison.OrdinalIgnoreCase)
+            && targetType.Equals("Microsoft.Network/virtualNetworks", StringComparison.OrdinalIgnoreCase))
+        || sourceType.Equals("Microsoft.Network/virtualHubs/routingIntent", StringComparison.OrdinalIgnoreCase);
 
     private static IEnumerable<(string TargetId, string Path)> EnumerateArmResourceReferences(
         object? value,
@@ -1378,6 +1697,31 @@ public class TopologyService : ITopologyService
             _ => null,
         };
     }
+
+    private static bool TryGetBoolean(IDictionary<string, object> dict, string key)
+    {
+        if (!TryGetValueCaseInsensitive(dict, key, out var value) || value is null) return false;
+        return value switch
+        {
+            bool boolean => boolean,
+            JValue { Type: JTokenType.Boolean } token => token.Value<bool>(),
+            string text when bool.TryParse(text, out var parsed) => parsed,
+            _ => false,
+        };
+    }
+
+    private static string? ParentResourceId(string resourceId, string childSegment)
+    {
+        var index = resourceId.IndexOf(childSegment, StringComparison.OrdinalIgnoreCase);
+        return index > 0 ? resourceId[..index].TrimEnd('/') : null;
+    }
+
+    private sealed record VwanInternetRoute(
+        string HubId,
+        string RoutingIntentId,
+        string NextHopId,
+        string PolicyName,
+        string ConnectionId);
 
     private static string? TryGetReferenceId(IDictionary<string, object> dict, string key)
     {

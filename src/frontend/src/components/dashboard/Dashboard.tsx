@@ -71,12 +71,12 @@ export default function Dashboard() {
   }, [])
 
   const statCards: StatCard[] = [
-    { label: 'Subscriptions', value: stats?.subscriptionCount ?? 0, accent: '#3b82f6', icon: 'M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z' },
-    { label: 'VNets', value: stats?.vnetCount ?? 0, accent: '#6366f1', icon: 'M5 3a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2H5z' },
-    { label: 'Resources', value: stats?.resourceCount ?? 0, accent: '#8b5cf6', icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10' },
-    { label: 'Compliance score', value: stats?.complianceScore != null ? `${stats.complianceScore}%` : 'N/A', accent: '#10b981', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' },
-    { label: 'Drift warnings', value: stats?.driftWarnings ?? 0, accent: '#f59e0b', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
-    { label: 'Deployments (30d)', value: stats?.recentDeployments ?? 0, accent: '#64748b', icon: 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12' },
+    { label: 'Subscriptions', value: metricValue(stats?.subscriptionCount), accent: '#3b82f6', icon: 'M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z' },
+    { label: 'VNets', value: metricValue(stats?.vnetCount), accent: '#6366f1', icon: 'M5 3a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2H5z' },
+    { label: 'Resources', value: metricValue(stats?.resourceCount), accent: '#8b5cf6', icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10' },
+    { label: 'Compliance score', value: stats?.complianceScore != null ? `${stats.complianceScore}%` : 'Not assessed', accent: '#10b981', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' },
+    { label: 'Drift warnings', value: stats?.driftWarnings != null ? stats.driftWarnings : 'Not assessed', accent: '#f59e0b', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
+    { label: 'Deployments (30d)', value: stats?.recentDeployments != null ? stats.recentDeployments : 'Not tracked', accent: '#64748b', icon: 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12' },
   ]
 
   const quickActions: QuickAction[] = [
@@ -181,7 +181,7 @@ export default function Dashboard() {
                 </li>
               ))}
             </ul>
-          ) : (
+          ) : stats?.recentDeployments != null ? (
             <div className="flex flex-col items-center py-6 text-center">
               <svg className="w-8 h-8 text-gray-200 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
@@ -189,6 +189,8 @@ export default function Dashboard() {
               <p className="text-sm text-gray-400">No deployments yet</p>
               <p className="text-xs text-gray-300 mt-0.5">Design an environment and generate Bicep to get started</p>
             </div>
+          ) : (
+            <p className="text-sm text-gray-400 py-6 text-center">Deployment history is not tracked yet.</p>
           )}
         </div>
 
@@ -208,7 +210,7 @@ export default function Dashboard() {
                 </li>
               ))}
             </ul>
-          ) : (
+          ) : stats?.driftWarnings != null ? (
             <div className="flex flex-col items-center py-6 text-center">
               <svg className="w-8 h-8 text-green-200 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -216,9 +218,15 @@ export default function Dashboard() {
               <p className="text-sm text-gray-400">All clear!</p>
               <p className="text-xs text-gray-300 mt-0.5">No drift detected between your design and deployed resources</p>
             </div>
+          ) : (
+            <p className="text-sm text-gray-400 py-6 text-center">Run drift evaluation before relying on this status.</p>
           )}
         </div>
       </div>
     </div>
   )
+}
+
+function metricValue(value: number | null | undefined): number | string {
+  return value ?? 'Unavailable'
 }

@@ -41,6 +41,7 @@ const networkPathResourceTypes = new Set([
   'microsoft.network/publicipaddresses',
   'microsoft.network/routetables',
   'microsoft.network/virtualhubs',
+  'microsoft.network/virtualhubs/routingintent',
   'microsoft.network/virtualnetworkgateways',
   'microsoft.network/virtualnetworks',
   'microsoft.network/virtualnetworks/subnets',
