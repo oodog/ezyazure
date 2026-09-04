@@ -74,6 +74,90 @@ public class DesignerAssistantServiceTests
         Assert.Contains(result.Warnings, warning => warning.Contains("duplicate", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void NormalizePlan_ResolvesNormalizedParentsAndConnectionAliases()
+    {
+        var plan = new DesignerAssistantService.AiPlan(
+            "Add private storage access.",
+            false,
+            null,
+            [
+                AddNode("Core VNet", "VNet"),
+                AddNode("Data Subnet", "Subnet") with { ParentRef = "Core VNet" },
+                AddNode("storageaccountstdatahack", "Storage Account") with { Label = "stdatahack" },
+                AddNode("privateendpointblob", "Private Endpoint") with
+                {
+                    Label = "Private Endpoint",
+                    ParentRef = "Data Subnet",
+                },
+                new DesignerAssistantService.AiAction(
+                    "connect", null, "private-link", "target-service", null, null, null, [],
+                    "Connect the Private Endpoint to storage."),
+            ],
+            []);
+
+        var result = DesignerAssistantService.NormalizePlan(plan, Request(), "gpt-4o-mini");
+
+        Assert.Equal(5, result.Actions.Count);
+        Assert.Equal("core-vnet", result.Actions[1].ParentRef);
+        Assert.Equal("data-subnet", result.Actions[3].ParentRef);
+        Assert.Equal("privateendpointblob", result.Actions[4].SourceRef);
+        Assert.Equal("storageaccountstdatahack", result.Actions[4].TargetRef);
+        Assert.DoesNotContain(result.Warnings, warning => warning.Contains("unknown", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NormalizePlan_DoesNotGuessAnAmbiguousPrivateEndpointTarget()
+    {
+        var plan = new DesignerAssistantService.AiPlan(
+            "Add private storage access.",
+            false,
+            null,
+            [
+                AddNode("storage-one", "Storage Account"),
+                AddNode("storage-two", "Storage Account"),
+                AddNode("private-endpoint", "Private Endpoint"),
+                new DesignerAssistantService.AiAction(
+                    "connect", null, "private-link", "target-service", null, null, null, [],
+                    "Connect the Private Endpoint to storage."),
+            ],
+            []);
+
+        var result = DesignerAssistantService.NormalizePlan(plan, Request(), "gpt-4o-mini");
+
+        Assert.Equal(3, result.Actions.Count);
+        Assert.DoesNotContain(result.Actions, action => action.Kind == "connect");
+        Assert.Contains(result.Warnings, warning => warning.Contains("unknown", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NormalizePlan_OrientsRouteTableAssociationAndOmitsFirewallEdge()
+    {
+        var plan = new DesignerAssistantService.AiPlan(
+            "Route the subnet through the firewall.",
+            false,
+            null,
+            [
+                AddNode("core", "VNet"),
+                AddNode("data", "Subnet") with { ParentRef = "core" },
+                AddNode("firewall", "Azure Firewall"),
+                AddNode("routes", "Route Table") with { ParentRef = "core" },
+                new DesignerAssistantService.AiAction(
+                    "connect", null, "data", "routes", null, null, null, [], "Associate routes."),
+                new DesignerAssistantService.AiAction(
+                    "connect", null, "routes", "firewall", null, null, null, [], "Show the next hop."),
+            ],
+            []);
+
+        var result = DesignerAssistantService.NormalizePlan(plan, Request(), "gpt-4o-mini");
+
+        Assert.Equal(5, result.Actions.Count);
+        var connection = Assert.Single(result.Actions, action => action.Kind == "connect");
+        Assert.Equal("routes", connection.SourceRef);
+        Assert.Equal("data", connection.TargetRef);
+        Assert.Contains(result.Warnings, warning => warning.Contains("next-hop IP", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static DesignerAssistantService.AiAction AddNode(string nodeRef, string blockType) => new(
         "addNode", nodeRef, null, null, blockType, blockType, null, [], $"Add {blockType}.");
 

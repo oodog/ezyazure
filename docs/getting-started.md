@@ -72,7 +72,7 @@ Edit `appsettings.Development.json`:
   "AzureAd": {
     "TenantId": "<your-tenant-id>",
     "ClientId": "<your-api-client-id>",
-    "Audience": "api://<your-api-client-id>"
+    "Audience": "<your-api-client-id>"
   }
 }
 ```

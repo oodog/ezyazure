@@ -22,6 +22,9 @@ public class DesignerAssistantService : IDesignerAssistantService
         "groupId", "privateEndpointPolicies", "routes", "sku", "threatIntelMode", "zones",
         "internetTraffic", "privateTraffic", "nextHopResourceId",
     };
+    private static readonly HashSet<string> PrivateEndpointTargetTypes = new(
+        ["Storage Account", "SQL Database", "PostgreSQL", "Cosmos DB", "Key Vault", "App Service", "Function App", "Container App"],
+        StringComparer.Ordinal);
     private static readonly HashSet<string> SafeGroundingPropertyNames = new(AllowedPropertyNames, StringComparer.OrdinalIgnoreCase);
 
     private readonly IConfiguration _configuration;
@@ -163,6 +166,18 @@ public class DesignerAssistantService : IDesignerAssistantService
 
         var existing = request.Nodes.ToDictionary(node => node.Id, StringComparer.OrdinalIgnoreCase);
         var knownRefs = request.Nodes.Select(node => node.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var knownTypes = request.Nodes.ToDictionary(node => node.Id, node => node.BlockType, StringComparer.OrdinalIgnoreCase);
+        var aliases = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in request.Nodes)
+        {
+            AddAlias(aliases, node.Id, node.Id);
+            AddAlias(aliases, node.Label, node.Id);
+            AddAlias(aliases, node.BlockType, node.Id);
+            if (node.Properties.TryGetValue("resourceName", out var resourceName))
+                AddAlias(aliases, resourceName?.ToString(), node.Id);
+            if (node.Properties.TryGetValue("name", out var name))
+                AddAlias(aliases, name?.ToString(), node.Id);
+        }
         var addedRefs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var actions = new List<DesignerAssistantAction>();
 
@@ -178,8 +193,22 @@ public class DesignerAssistantService : IDesignerAssistantService
                     warnings.Add("Skipped an invalid or duplicate add-node action.");
                     continue;
                 }
+                var parentRef = string.IsNullOrWhiteSpace(candidate.ParentRef)
+                    ? null
+                    : ResolveKnownRef(candidate.ParentRef, knownRefs, aliases);
+                if (!string.IsNullOrWhiteSpace(candidate.ParentRef) && parentRef is null)
+                {
+                    warnings.Add("Skipped a resource with an unknown parent.");
+                    continue;
+                }
                 knownRefs.Add(nodeRef);
-                actions.Add(ToAction(candidate with { NodeRef = nodeRef }, "addNode"));
+                knownTypes[nodeRef] = candidate.BlockType;
+                AddAlias(aliases, candidate.NodeRef, nodeRef);
+                AddAlias(aliases, candidate.Label, nodeRef);
+                AddAlias(aliases, candidate.BlockType, nodeRef);
+                AddAlias(aliases, candidate.Properties?.FirstOrDefault(property => property.Name == "resourceName")?.Value, nodeRef);
+                AddAlias(aliases, candidate.Properties?.FirstOrDefault(property => property.Name == "name")?.Value, nodeRef);
+                actions.Add(ToAction(candidate with { NodeRef = nodeRef, ParentRef = parentRef }, "addNode"));
                 continue;
             }
 
@@ -196,14 +225,34 @@ public class DesignerAssistantService : IDesignerAssistantService
 
             if (kind == "connect")
             {
-                if (string.IsNullOrWhiteSpace(candidate.SourceRef) || string.IsNullOrWhiteSpace(candidate.TargetRef) ||
-                    !knownRefs.Contains(candidate.SourceRef) || !knownRefs.Contains(candidate.TargetRef) ||
-                    string.Equals(candidate.SourceRef, candidate.TargetRef, StringComparison.OrdinalIgnoreCase))
+                var sourceRef = ResolveKnownRef(candidate.SourceRef, knownRefs, aliases);
+                var targetRef = ResolveKnownRef(candidate.TargetRef, knownRefs, aliases);
+                if ((sourceRef is null || targetRef is null) &&
+                    TryResolvePrivateEndpointConnection(knownTypes, out var privateEndpointRef, out var targetResourceRef))
+                {
+                    sourceRef = privateEndpointRef;
+                    targetRef = targetResourceRef;
+                }
+                if (sourceRef is not null && targetRef is not null &&
+                    knownTypes.TryGetValue(sourceRef, out var sourceType) &&
+                    knownTypes.TryGetValue(targetRef, out var targetType))
+                {
+                    if (sourceType == "Subnet" && targetType == "Route Table")
+                        (sourceRef, targetRef) = (targetRef, sourceRef);
+                    else if ((sourceType == "Route Table" && targetType == "Azure Firewall") ||
+                        (sourceType == "Azure Firewall" && targetType == "Route Table"))
+                    {
+                        warnings.Add("Omitted a redundant Route Table-to-firewall connection; the route next-hop IP defines that path.");
+                        continue;
+                    }
+                }
+                if (sourceRef is null || targetRef is null ||
+                    string.Equals(sourceRef, targetRef, StringComparison.OrdinalIgnoreCase))
                 {
                     warnings.Add("Skipped a connection with an unknown or identical endpoint.");
                     continue;
                 }
-                actions.Add(ToAction(candidate, "connect"));
+                actions.Add(ToAction(candidate with { SourceRef = sourceRef, TargetRef = targetRef }, "connect"));
                 continue;
             }
 
@@ -337,6 +386,67 @@ public class DesignerAssistantService : IDesignerAssistantService
     {
         var normalized = Regex.Replace(value?.Trim().ToLowerInvariant() ?? string.Empty, @"[^a-z0-9-]+", "-").Trim('-');
         return normalized.Length is > 0 and <= 70 ? normalized : null;
+    }
+
+    private static string? ResolveKnownRef(
+        string? value,
+        HashSet<string> knownRefs,
+        IReadOnlyDictionary<string, string?> aliases)
+    {
+        var candidate = value?.Trim();
+        if (string.IsNullOrWhiteSpace(candidate)) return null;
+        if (knownRefs.TryGetValue(candidate, out var exact)) return exact;
+
+        var normalized = NormalizeRef(candidate);
+        if (normalized is null) return null;
+        if (knownRefs.TryGetValue(normalized, out var resolved)) return resolved;
+        if (aliases.TryGetValue(normalized, out var aliased)) return aliased;
+
+        var compact = normalized.Replace("-", string.Empty, StringComparison.Ordinal);
+        if (compact.Length < 6) return null;
+        var matches = aliases
+            .Where(pair => pair.Value is not null)
+            .Where(pair =>
+            {
+                var alias = pair.Key.Replace("-", string.Empty, StringComparison.Ordinal);
+                return alias.Equals(compact, StringComparison.OrdinalIgnoreCase) ||
+                    alias.StartsWith(compact, StringComparison.OrdinalIgnoreCase) ||
+                    compact.StartsWith(alias, StringComparison.OrdinalIgnoreCase);
+            })
+            .Select(pair => pair.Value!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(2)
+            .ToList();
+        return matches.Count == 1 ? matches[0] : null;
+    }
+
+    private static void AddAlias(Dictionary<string, string?> aliases, string? value, string nodeRef)
+    {
+        var alias = NormalizeRef(value);
+        if (alias is null) return;
+        if (aliases.TryGetValue(alias, out var existing) &&
+            !string.Equals(existing, nodeRef, StringComparison.OrdinalIgnoreCase))
+        {
+            aliases[alias] = null;
+            return;
+        }
+        aliases[alias] = nodeRef;
+    }
+
+    private static bool TryResolvePrivateEndpointConnection(
+        IReadOnlyDictionary<string, string> knownTypes,
+        out string privateEndpointRef,
+        out string targetResourceRef)
+    {
+        privateEndpointRef = string.Empty;
+        targetResourceRef = string.Empty;
+        var privateEndpoints = knownTypes.Where(pair => pair.Value == "Private Endpoint").Select(pair => pair.Key).Take(2).ToList();
+        var targets = knownTypes.Where(pair => PrivateEndpointTargetTypes.Contains(pair.Value)).Select(pair => pair.Key).Take(2).ToList();
+        if (privateEndpoints.Count != 1 || targets.Count != 1) return false;
+
+        privateEndpointRef = privateEndpoints[0];
+        targetResourceRef = targets[0];
+        return true;
     }
 
     private static string Limit(string value, int length) => value.Length <= length ? value : value[..length];

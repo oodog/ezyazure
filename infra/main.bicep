@@ -252,7 +252,7 @@ module apiApp 'modules/container-apps.bicep' = {
       { name: 'Storage__BlobEndpoint', value: storage.outputs.blobEndpoint }
       { name: 'AzureAd__TenantId', value: tenantId }
       { name: 'AzureAd__ClientId', value: apiClientId }
-      { name: 'AzureAd__Audience', value: 'api://${apiClientId}' }
+      { name: 'AzureAd__Audience', value: apiClientId }
       { name: 'AllowedOrigins__0', value: 'https://${staticWebApp.outputs.defaultHostname}' }
       { name: 'AzureOpenAI__Endpoint', value: azureOpenAIEndpoint }
       { name: 'AzureOpenAI__DeploymentName', value: azureOpenAIDeploymentName }
