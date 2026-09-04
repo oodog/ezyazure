@@ -32,13 +32,13 @@ param azureOpenAIDeploymentName string = 'gpt-4o-mini'
 @description('Azure OpenAI inference API version.')
 param azureOpenAIApiVersion string = '2024-10-21'
 
-@description('Storage public network access. Existing staging remains private; new self-hosted environments default to public access with Entra authentication.')
+@description('Storage public network access. The VNet-free API reaches Blob Storage through this endpoint using managed identity.')
 @allowed(['Enabled', 'Disabled'])
-param storagePublicNetworkAccess string = environmentName == 'staging' ? 'Disabled' : 'Enabled'
+param storagePublicNetworkAccess string = 'Enabled'
 
-@description('Storage firewall default action. Existing staging remains deny-by-default.')
+@description('Storage firewall default action. Access remains Entra authenticated because shared keys and anonymous blob access are disabled.')
 @allowed(['Allow', 'Deny'])
-param storageNetworkDefaultAction string = environmentName == 'staging' ? 'Deny' : 'Allow'
+param storageNetworkDefaultAction string = 'Allow'
 
 @description('Static Web App SKU. Existing staging uses Standard; new self-hosted environments default to Free.')
 @allowed(['Free', 'Standard'])
