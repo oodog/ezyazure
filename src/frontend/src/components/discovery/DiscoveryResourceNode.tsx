@@ -3,6 +3,7 @@ import { Handle, Position, type NodeProps } from 'reactflow'
 import type { AzureResource } from '@/types/azure'
 import { getAzureIconForResourceType } from '@/utils/azureIconMap'
 import { getSubnetPrefixes, getVNetPrefixes, getVmPrivateIps } from '@/utils/azureResourceDetails'
+import { getResourceProvisioningHealth } from '@/utils/resourceHealth'
 
 /**
  * Maps a full Azure ARM resource `type` (e.g. `Microsoft.Network/virtualNetworks`)
@@ -79,6 +80,9 @@ interface NodeData extends AzureResource {
 function DiscoveryResourceNode({ data, selected }: NodeProps<NodeData>) {
   const cat = categorise(data.type)
   const iconSrc = getAzureIconForResourceType(data.type)
+  const health = getResourceProvisioningHealth(data)
+  const failed = health?.severity === 'critical'
+  const transitioning = health?.severity === 'warning'
   const prefix =
     getSubnetPrefixes(data)[0] ??
     getVNetPrefixes(data)[0] ??
@@ -86,13 +90,17 @@ function DiscoveryResourceNode({ data, selected }: NodeProps<NodeData>) {
   return (
     <div
       className={`relative w-56 min-h-28 bg-white rounded-xl shadow-md border-2 transition-all duration-150 ${
-        selected ? 'shadow-lg ring-2 ring-offset-1' : 'border-gray-200 hover:border-gray-300 hover:shadow-lg'
+        failed
+          ? 'border-red-500 shadow-red-100 ring-2 ring-red-100'
+          : selected
+            ? 'shadow-lg ring-2 ring-offset-1'
+            : 'border-gray-200 hover:border-gray-300 hover:shadow-lg'
       }`}
-      style={selected ? { borderColor: cat.accent } : { borderColor: '#e5e7eb' }}
+      style={failed ? undefined : selected ? { borderColor: cat.accent } : { borderColor: '#e5e7eb' }}
     >
       <div
         className="absolute left-0 top-0 bottom-0 w-1 rounded-l-xl"
-        style={{ backgroundColor: cat.accent }}
+        style={{ backgroundColor: failed ? '#dc2626' : cat.accent }}
       />
       <Handle type="target" position={Position.Left} className="!w-3 !h-3 !border-2 !border-white !bg-gray-400 !rounded-full" style={{ left: -6 }} />
       <Handle type="target" position={Position.Top} id="top" className="!w-3 !h-3 !border-2 !border-white !bg-gray-400 !rounded-full" style={{ top: -6 }} />
@@ -107,6 +115,17 @@ function DiscoveryResourceNode({ data, selected }: NodeProps<NodeData>) {
           <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold text-gray-800 leading-4 break-words" title={data.name}>{data.name}</p>
             <p className="text-[10px] font-medium mt-0.5 break-words" style={{ color: cat.accent }}>{cat.label}</p>
+            {(failed || transitioning) && health && (
+              <p
+                role="status"
+                className={`mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                  failed ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'
+                }`}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${failed ? 'bg-red-600' : 'bg-amber-500'}`} />
+                {health.state}
+              </p>
+            )}
             {prefix && (
               <p className="text-[10px] text-blue-700 font-mono break-all" title={prefix}>{prefix}</p>
             )}

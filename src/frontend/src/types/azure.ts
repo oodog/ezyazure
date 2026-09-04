@@ -78,11 +78,22 @@ export interface DashboardStats {
   subscriptionCount: number | null
   vnetCount: number | null
   resourceCount: number | null
+  failedResourceCount: number | null
+  failedResources: ResourceHealthSummary[]
   complianceScore: number | null
   driftWarnings: number | null
   recentDeployments: number | null
   recentDeploymentList?: { id: string; name: string; status: string }[]
   driftList?: { resourceId: string; message: string }[]
+}
+
+export interface ResourceHealthSummary {
+  id: string
+  name: string
+  type: string
+  resourceGroup: string
+  subscriptionId: string
+  state: string
 }
 
 export interface BestPracticeRule {

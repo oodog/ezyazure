@@ -97,6 +97,60 @@ public class NormalizeJTokenTests
     }
 
     [Fact]
+    public void DashboardStats_SerializesFailedResourceDetails()
+    {
+        var json = JsonSerializer.Serialize(
+            new DashboardStats
+            {
+                FailedResourceCount = 1,
+                FailedResources =
+                [
+                    new ResourceHealthSummary(
+                        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/azureFirewalls/fw",
+                        "fw",
+                        "Microsoft.Network/azureFirewalls",
+                        "rg",
+                        "sub",
+                        "Failed"),
+                ],
+            },
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+
+        Assert.Contains("\"failedResourceCount\":1", json);
+        Assert.Contains("\"name\":\"fw\"", json);
+        Assert.Contains("\"state\":\"Failed\"", json);
+    }
+
+    [Fact]
+    public void SummarizeFailedResources_IncludesArmChildrenAndDeduplicatesResources()
+    {
+        var failedIntent = new AzureResource
+        {
+            Id = "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualHubs/hub/routingIntent/default",
+            Name = "default",
+            Type = "Microsoft.Network/virtualHubs/routingIntent",
+            SubscriptionId = "sub",
+            ResourceGroup = "rg",
+            Location = "australiaeast",
+            Properties = new() { ["provisioningState"] = "Failed" },
+        };
+        var succeededFirewall = failedIntent with
+        {
+            Id = "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/azureFirewalls/firewall",
+            Name = "firewall",
+            Type = "Microsoft.Network/azureFirewalls",
+            Properties = new() { ["provisioningState"] = "Succeeded" },
+        };
+
+        var summaries = ResourceProvisioningHealth.SummarizeFailedResources(
+            [failedIntent, failedIntent with { Name = "duplicate" }, succeededFirewall]);
+
+        var summary = Assert.Single(summaries);
+        Assert.Equal("default", summary.Name);
+        Assert.Equal("Failed", summary.State);
+    }
+
+    [Fact]
     public void FullTopologyProperties_SerializeCorrectlyWithSTJ()
     {
         // Simulate what Properties dict looks like after ARM enrichment + NormalizeJTokenToNative

@@ -107,11 +107,55 @@ public record DashboardStats
     [JsonPropertyName("vnetCount")]
     public int? VNetCount { get; init; }
     public int? ResourceCount { get; init; }
+    public int? FailedResourceCount { get; init; }
+    public IReadOnlyList<ResourceHealthSummary> FailedResources { get; init; } = [];
     public double? ComplianceScore { get; init; }
     public int? DriftWarnings { get; init; }
     public int? RecentDeployments { get; init; }
     public IReadOnlyList<DeploymentSummary> RecentDeploymentList { get; init; } = [];
     public IReadOnlyList<DriftWarning> DriftList { get; init; } = [];
+}
+
+public record ResourceHealthSummary(
+    string Id,
+    string Name,
+    string Type,
+    string ResourceGroup,
+    string SubscriptionId,
+    string State);
+
+public static class ResourceProvisioningHealth
+{
+    private static readonly HashSet<string> FailedStates = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Failed",
+        "Canceled",
+    };
+
+    public static bool IsFailed(AzureResource resource) =>
+        TryGetState(resource) is { } state && FailedStates.Contains(state);
+
+    public static string? TryGetState(AzureResource resource)
+    {
+        var value = resource.Properties.FirstOrDefault(property =>
+            property.Key.Equals("provisioningState", StringComparison.OrdinalIgnoreCase)).Value;
+        return value?.ToString();
+    }
+
+    public static IReadOnlyList<ResourceHealthSummary> SummarizeFailedResources(IEnumerable<AzureResource> resources) =>
+        resources
+            .Where(IsFailed)
+            .GroupBy(resource => resource.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(resource => resource.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(resource => new ResourceHealthSummary(
+                resource.Id,
+                resource.Name,
+                resource.Type,
+                resource.ResourceGroup,
+                resource.SubscriptionId,
+                TryGetState(resource) ?? "Failed"))
+            .ToList();
 }
 
 public record DeploymentSummary(string Id, string Name, string Status);

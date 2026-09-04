@@ -38,4 +38,32 @@ describe('DiscoveryResourceNode', () => {
     expect(label.className).toContain('break-words')
     expect(label.className).not.toContain('truncate')
   })
+
+  it('shows a critical badge when Azure reports failed provisioning', () => {
+    render(
+      <ReactFlowProvider>
+        <DiscoveryResourceNode
+          id="firewall"
+          type="azureResource"
+          selected={false}
+          zIndex={0}
+          isConnectable={false}
+          xPos={0}
+          yPos={0}
+          dragging={false}
+          data={{
+            id: '/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/azureFirewalls/firewall',
+            type: 'Microsoft.Network/azureFirewalls',
+            name: 'firewall',
+            subscriptionId: 'sub',
+            resourceGroup: 'rg',
+            location: 'australiaeast',
+            properties: { provisioningState: 'Failed' },
+          }}
+        />
+      </ReactFlowProvider>,
+    )
+
+    expect(screen.getByRole('status').textContent).toContain('Failed')
+  })
 })

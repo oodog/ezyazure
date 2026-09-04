@@ -77,6 +77,26 @@ public class DiscoveryAssistantServiceTests
     }
 
     [Fact]
+    public void BuildGroundingSummary_IncludesFailedProvisioningStateAsHealthFinding()
+    {
+        var firewall = Node("firewall", "Microsoft.Network/azureFirewalls", new()
+        {
+            ["provisioningState"] = "Failed",
+        });
+        var request = new DiscoveryAssistantRequest
+        {
+            SubscriptionIds = ["sub"],
+            Message = "Are my resources healthy?",
+        };
+
+        var summary = DiscoveryAssistantService.BuildGroundingSummary(request, Graph(firewall), Routing(), SkillRegistry);
+
+        var finding = Assert.Single(summary.HealthFindings);
+        Assert.Equal("firewall", finding.ResourceName);
+        Assert.Equal("Failed", finding.State);
+    }
+
+    [Fact]
     public void NormalizeResponse_RejectsNonMicrosoftAndDuplicateCitations()
     {
         var skills = SkillRegistry.SelectSkills(

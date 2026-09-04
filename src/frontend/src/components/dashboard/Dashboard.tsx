@@ -3,11 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import { discoveryService } from '@/services/discoveryService'
 import type { DashboardStats } from '@/types/azure'
 
-interface StatCard { label: string; value: number | string; accent: string; icon: string }
+interface StatCard { label: string; value: number | string; accent: string; icon: string; critical?: boolean }
 
-function StatCard({ label, value, accent, icon }: StatCard) {
+function StatCard({ label, value, accent, icon, critical }: StatCard) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5 flex items-start gap-4 hover:shadow-md transition-shadow">
+    <div className={`bg-white rounded-xl border p-5 flex items-start gap-4 hover:shadow-md transition-shadow ${critical ? 'border-red-400 ring-2 ring-red-100' : 'border-gray-200'}`}>
       <div className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: accent + '18' }}>
         <svg className="w-5 h-5" style={{ color: accent }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
           <path strokeLinecap="round" strokeLinejoin="round" d={icon} />
@@ -43,6 +43,7 @@ function QuickActionBtn({ label, description, href, accent, icon }: QuickAction)
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [apiError, setApiError] = useState<string | null>(null)
@@ -74,6 +75,7 @@ export default function Dashboard() {
     { label: 'Subscriptions', value: metricValue(stats?.subscriptionCount), accent: '#3b82f6', icon: 'M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z' },
     { label: 'VNets', value: metricValue(stats?.vnetCount), accent: '#6366f1', icon: 'M5 3a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2H5z' },
     { label: 'Resources', value: metricValue(stats?.resourceCount), accent: '#8b5cf6', icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10' },
+    { label: 'Failed resources', value: metricValue(stats?.failedResourceCount), accent: stats?.failedResourceCount ? '#dc2626' : '#059669', critical: (stats?.failedResourceCount ?? 0) > 0, icon: 'M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 4.5h.008v.008H12v-.008z' },
     { label: 'Compliance score', value: stats?.complianceScore != null ? `${stats.complianceScore}%` : 'Not assessed', accent: '#10b981', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' },
     { label: 'Drift warnings', value: stats?.driftWarnings != null ? stats.driftWarnings : 'Not assessed', accent: '#f59e0b', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
     { label: 'Deployments (30d)', value: stats?.recentDeployments != null ? stats.recentDeployments : 'Not tracked', accent: '#64748b', icon: 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12' },
@@ -124,6 +126,36 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+      {!loading && (stats?.failedResourceCount ?? 0) > 0 && (
+        <div role="alert" className="border-l-4 border-red-600 bg-red-50 px-4 py-3 text-red-950">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-bold">Azure reports failed resources</p>
+              <p className="mt-0.5 text-xs text-red-800">These are live provisioning states from Azure Resource Graph and ARM.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate('/discovery')}
+              className="text-xs font-bold text-red-800 underline underline-offset-2 hover:text-red-950"
+            >
+              Open Discovery
+            </button>
+          </div>
+          <ul className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {stats?.failedResources?.slice(0, 6).map((resource) => (
+              <li key={resource.id} className="border border-red-200 bg-white px-3 py-2">
+                <p className="text-sm font-semibold text-red-900">{resource.name}</p>
+                <p className="text-xs text-red-700">{resource.state} · {resource.resourceGroup}</p>
+              </li>
+            ))}
+            {(stats?.failedResourceCount ?? 0) > 6 && (
+              <li className="flex items-center px-3 py-2 text-xs font-semibold text-red-700">
+                +{(stats?.failedResourceCount ?? 0) - 6} more failed resources
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
       {/* Hero */}
       <div className="bg-gradient-to-br from-azure-600 to-azure-500 rounded-2xl px-8 py-6 text-white flex items-center justify-between">
         <div>
@@ -147,15 +179,15 @@ export default function Dashboard() {
 
       {/* Stats */}
       {loading ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {Array.from({ length: 6 }).map((_, i) => (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+          {Array.from({ length: 7 }).map((_, i) => (
             <div key={i} className="h-24 bg-gray-100 rounded-xl animate-pulse" />
           ))}
         </div>
       ) : (
         <div>
           <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">Environment at a glance</p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
             {statCards.map((card) => <StatCard key={card.label} {...card} />)}
           </div>
         </div>

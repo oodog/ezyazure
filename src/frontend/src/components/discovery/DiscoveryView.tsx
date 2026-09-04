@@ -43,6 +43,7 @@ import {
   type TopologyExportFormat,
 } from '@/utils/topologyExport'
 import { createDiscoveryDesignHandoff, saveDiscoveryDesignHandoff } from '@/utils/discoveryDesignHandoff'
+import { isResourceProvisioningFailed } from '@/utils/resourceHealth'
 
 const nodeTypes = { azureResource: DiscoveryResourceNode }
 const edgeTypes = { discoveryEdge: DiscoveryEdge }
@@ -211,6 +212,10 @@ export default function DiscoveryView() {
   }, [apiSubs, manual.items])
 
   const selectedSubIds = useMemo(() => Array.from(selectedSubs), [selectedSubs])
+  const failedResources = useMemo(
+    () => nodes.map((node) => node.data).filter(isResourceProvisioningFailed),
+    [nodes],
+  )
 
   const availableTechnologies = useMemo(() => {
     const counts = new Map<DiscoveryTechnology, number>()
@@ -799,6 +804,26 @@ export default function DiscoveryView() {
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+        {failedResources.length > 0 && (
+          <div role="alert" className="mb-3 border-l-4 border-red-600 bg-red-50 px-4 py-3 text-red-950">
+            <p className="text-sm font-bold">
+              {failedResources.length} resource{failedResources.length === 1 ? '' : 's'} failed provisioning
+            </p>
+            <p className="mt-0.5 text-xs text-red-800">
+              Azure reported a failed management-plane state. Review the resource before relying on connected paths.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {failedResources.slice(0, 6).map((resource) => (
+                <span key={resource.id} className="border border-red-200 bg-white px-2 py-1 text-xs font-semibold text-red-800">
+                  {resource.name} · {resource.resourceGroup}
+                </span>
+              ))}
+              {failedResources.length > 6 && (
+                <span className="px-2 py-1 text-xs font-semibold text-red-700">+{failedResources.length - 6} more</span>
+              )}
+            </div>
           </div>
         )}
         <div ref={topologyCanvasRef} className="relative flex-1 bg-white border border-gray-200 rounded-lg overflow-hidden">

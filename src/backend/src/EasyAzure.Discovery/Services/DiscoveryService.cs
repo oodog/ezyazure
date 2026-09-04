@@ -30,8 +30,8 @@ public class DiscoveryService : IDiscoveryService
     public async Task<DashboardStats> GetDashboardStatsAsync(CancellationToken ct = default)
     {
         // Each tile is fetched independently so a single failure (missing RBAC,
-        // network blip, transient Resource Graph error) downgrades the affected
-        // metric to zero rather than failing the entire dashboard request.
+        // network blip, transient Resource Graph error) marks only that metric
+        // unavailable rather than failing the entire dashboard request.
         int? subscriptionCount = null;
         IReadOnlyList<SubscriptionSummary> subscriptions = [];
         try
@@ -63,11 +63,34 @@ public class DiscoveryService : IDiscoveryService
             catch (Exception ex) { _logger.LogWarning(ex, "Dashboard: counting VNets failed; metric is unavailable."); }
         }
 
+        int? failedResourceCount = null;
+        IReadOnlyList<ResourceHealthSummary> failedResources = [];
+        if (subscriptionIds.Count == 0 && subscriptionCount is not null)
+        {
+            failedResourceCount = 0;
+        }
+        else if (subscriptionIds.Count > 0)
+        {
+            try
+            {
+                var graph = await _topology.BuildTopologyMultiAsync(subscriptionIds, ct);
+                failedResources = ResourceProvisioningHealth.SummarizeFailedResources(
+                    graph.Nodes.Select(node => node.Data));
+                failedResourceCount = failedResources.Count;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Dashboard: discovering failed resources failed; metric is unavailable.");
+            }
+        }
+
         return new DashboardStats
         {
             SubscriptionCount = subscriptionCount,
             ResourceCount = resourceCount,
             VNetCount = vnetCount,
+            FailedResourceCount = failedResourceCount,
+            FailedResources = failedResources,
         };
     }
 
