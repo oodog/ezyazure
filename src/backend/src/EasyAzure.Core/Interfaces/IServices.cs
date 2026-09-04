@@ -81,6 +81,17 @@ public interface IDiscoveryAssistantService
         CancellationToken ct = default);
 }
 
+    public interface IDesignerAssistantService
+    {
+        /// <summary>
+        /// Converts a natural-language design request into bounded, reviewable canvas actions.
+        /// The service never mutates or persists a design.
+        /// </summary>
+        Task<DesignerAssistantResponse> PlanAsync(
+        DesignerAssistantRequest request,
+        CancellationToken ct = default);
+    }
+
 /// <summary>
 /// Persists and compares discovery snapshots (versioning). Snapshots are stored in blob
 /// storage so customers can review how their environment changed between discoveries.

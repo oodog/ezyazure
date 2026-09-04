@@ -13,6 +13,7 @@ For a pitch, demo script, judging questions, and specialist asks, see the
 - **Visualize** VNets, subnets, NSGs, route tables, private endpoints, VMs, App Services, databases, firewalls, gateways, and load balancers
 - **Analyze data paths** between resources, including routes, NSGs, next hops, peering, private endpoints, and blockers
 - **Design** new environments with drag-and-drop blocks
+- **Describe design changes** in natural language, review the AI-proposed canvas actions, and apply only supported resources and connections
 - **Validate** designs against Microsoft Well-Architected Framework and Azure Landing Zone best practices
 - **Generate** Bicep Infrastructure-as-Code using Azure Verified Modules
 - **Preview** changes with ARM what-if before deployment

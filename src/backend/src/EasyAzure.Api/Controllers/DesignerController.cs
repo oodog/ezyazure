@@ -2,6 +2,7 @@ using EasyAzure.Core.Interfaces;
 using EasyAzure.Core.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace EasyAzure.Api.Controllers;
 
@@ -12,11 +13,16 @@ public class DesignerController : ControllerBase
 {
     private readonly IDesignerService _designer;
     private readonly IDesignImportService _designImport;
+    private readonly IDesignerAssistantService _assistant;
 
-    public DesignerController(IDesignerService designer, IDesignImportService designImport)
+    public DesignerController(
+        IDesignerService designer,
+        IDesignImportService designImport,
+        IDesignerAssistantService assistant)
     {
         _designer = designer;
         _designImport = designImport;
+        _assistant = assistant;
     }
 
     [HttpGet]
@@ -58,6 +64,35 @@ public class DesignerController : ControllerBase
     {
         var result = await _designer.ValidateAsync(id, ct);
         return Ok(result);
+    }
+
+    [HttpPost("assistant/chat")]
+    [EnableRateLimiting("assistant")]
+    [RequestSizeLimit(1_000_000)]
+    public async Task<ActionResult<DesignerAssistantResponse>> AssistantChat(
+        [FromBody] DesignerAssistantRequest request,
+        CancellationToken ct)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Message) || request.Message.Length > 2_000)
+            return BadRequest(new { error = "Message is required and must be 2,000 characters or fewer." });
+        if (request.History is null || request.History.Count > 6 ||
+            request.History.Any(turn => turn is null || turn.Role is not ("user" or "assistant") ||
+                string.IsNullOrWhiteSpace(turn.Content) || turn.Content.Length > 2_000))
+            return BadRequest(new { error = "Conversation history exceeds the supported limit." });
+        if (request.Nodes is null || request.Nodes.Count > 120 || request.Edges is null || request.Edges.Count > 240)
+            return BadRequest(new { error = "The Designer canvas exceeds the supported assistant limit." });
+        if (request.Nodes.Any(node => node is null || string.IsNullOrWhiteSpace(node.Id) || node.Id.Length > 100 ||
+                string.IsNullOrWhiteSpace(node.BlockType) || node.BlockType.Length > 80 ||
+                string.IsNullOrWhiteSpace(node.Label) || node.Label.Length > 120 ||
+                node.ParentId?.Length > 100 || node.Properties is null || node.Properties.Count > 40) ||
+            request.Nodes.Select(node => node.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != request.Nodes.Count)
+            return BadRequest(new { error = "The Designer canvas contains invalid nodes." });
+        if (request.Edges.Any(edge => edge is null || string.IsNullOrWhiteSpace(edge.Id) || edge.Id.Length > 100 ||
+                string.IsNullOrWhiteSpace(edge.Source) || edge.Source.Length > 100 ||
+                string.IsNullOrWhiteSpace(edge.Target) || edge.Target.Length > 100 || edge.Relationship?.Length > 80))
+            return BadRequest(new { error = "The Designer canvas contains invalid relationships." });
+
+        return Ok(await _assistant.PlanAsync(request, ct));
     }
 
     [HttpPost("import/analyze")]

@@ -31,10 +31,11 @@ async function acquireApiToken(): Promise<string | null> {
   } catch (err) {
     if (err instanceof InteractionRequiredAuthError) {
       console.warn('[apiClient] API scope consent required — sign out and sign in again.')
+      throw new Error('Your EasyAzure API session needs to be renewed. Sign out, then sign in again.')
     } else {
       console.error('[apiClient] acquireTokenSilent failed:', err)
+      throw new Error('EasyAzure could not acquire an API access token. Sign out, then sign in again.')
     }
-    return null
   }
 }
 
@@ -58,6 +59,9 @@ apiClient.interceptors.response.use(
         method: error.config?.method,
         message: error.message,
       })
+    }
+    if (error.response?.status === 401) {
+      error.message = 'Your EasyAzure API session is not valid for this deployment. Sign out, then sign in again.'
     }
     return Promise.reject(error)
   },

@@ -39,6 +39,7 @@ builder.Services.AddScoped<IRoutingAnalysisService, RoutingAnalysisService>();
 builder.Services.AddSingleton<IProductSkillProvider, JsonProductSkillProvider>();
 builder.Services.AddSingleton<ProductSkillRegistry>();
 builder.Services.AddScoped<IDiscoveryAssistantService, DiscoveryAssistantService>();
+builder.Services.AddScoped<IDesignerAssistantService, DesignerAssistantService>();
 builder.Services.AddScoped<IBicepGeneratorService, BicepGeneratorService>();
 builder.Services.AddScoped<IDeploymentService, DeploymentService>();
 builder.Services.AddScoped<IReplicationService, ReplicationService>();

@@ -42,6 +42,9 @@ import {
 import IpRangeSuggestionDialog from './IpRangeSuggestionDialog'
 import { consumeDiscoveryDesignHandoff } from '@/utils/discoveryDesignHandoff'
 import { analyzeDesignDelta } from '@/utils/designDelta'
+import DesignerAssistantPanel from './DesignerAssistantPanel'
+import { applyDesignerAssistantActions } from './designerAssistantActions'
+import type { DesignerAssistantAction } from '@/services/designerAssistantService'
 
 const nodeTypes = {
   azureResource: AzureResourceNode,
@@ -474,6 +477,35 @@ function CanvasInner() {
     showToast('info', `Added ${ipSuggestions.length} example IP range${ipSuggestions.length === 1 ? '' : 's'} for review.`)
   }
 
+  const applyAssistantPlan = (actions: DesignerAssistantAction[]) => {
+    const result = applyDesignerAssistantActions(nodes, edges, actions)
+    if (result.appliedActions === 0) {
+      showToast('error', result.warnings[0] ?? 'No supported changes could be applied.')
+      return { appliedActions: 0, warnings: result.warnings }
+    }
+    const updatedDesignEdges = materializeDesignEdges(result.nodes, result.edges)
+    setNodes(result.nodes)
+    setEdges(result.edges)
+    setSelectedNodeId(null)
+    setSelectedEdgeId(null)
+    setFindings(validateDesign(result.nodes, updatedDesignEdges).map((finding) => ({
+      ...finding,
+      source: 'rule' as const,
+      requiresAcknowledgement: finding.requiresAcknowledgement ?? finding.severity !== 'info',
+    })))
+    setAcknowledged(new Set())
+    setAiUsed(false)
+    setAiModel(null)
+    const suggestions = suggestMissingDesignIpRanges(result.nodes)
+    setIpSuggestions(suggestions.length > 0 ? suggestions : null)
+    window.requestAnimationFrame(() => void fitView({ padding: 0.15, duration: 300 }))
+    const warningSuffix = result.warnings.length > 0
+      ? ` ${result.warnings.length} unsupported change${result.warnings.length === 1 ? ' was' : 's were'} skipped.`
+      : ''
+    showToast('info', `Applied ${result.appliedActions} reviewed design change${result.appliedActions === 1 ? '' : 's'}.${warningSuffix}`)
+    return { appliedActions: result.appliedActions, warnings: result.warnings }
+  }
+
   /** Stable key for a finding's acknowledgement state. */
   const ackKey = (f: ValidationFinding, idx: number) =>
     `${f.ruleId}::${f.nodeId ?? 'global'}::${idx}`
@@ -633,6 +665,8 @@ function CanvasInner() {
               maskColor="rgba(241,245,249,0.7)"
             />
           </ReactFlow>
+
+          <DesignerAssistantPanel nodes={nodes} edges={edges} onApply={applyAssistantPlan} />
 
           {/* Empty state overlay */}
           {nodes.length === 0 && (

@@ -35,6 +35,8 @@ right evidence, show it clearly, and help us involve the right people sooner."
   and keep only what is useful.
 - Draw or update a design, check relationships and IP ranges, and request examples for missing IP
   information.
+- Describe a change in the Designer, such as adding a subnet and storage Private Endpoint or routing
+  subnet traffic through a firewall, then review the proposed canvas actions before applying them.
 - Open a discovered topology in the Designer as an immutable baseline and identify only the new
   resources and supported connections.
 - Generate Bicep for supported additions and review Azure what-if before deployment.
@@ -49,7 +51,8 @@ and finish with 'show me exactly what this proposed change would add.'"
 2. Run Discovery and choose the level of topology detail we need.
 3. Review routing findings and ask the assistant a focused question.
 4. Open the result in Design / Validate.
-5. Add the proposed endpoint, subnet, Private Endpoint, or supported relationship.
+5. Describe the proposed endpoint, subnet, Private Endpoint, firewall route, or supported
+  relationship, review the AI-generated action plan, and apply it to the canvas.
 6. Review deterministic validation findings and the additions-only change summary.
 7. Generate Bicep and run what-if.
 8. Ask the responsible owners to approve before deployment.

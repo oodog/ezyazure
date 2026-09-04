@@ -177,6 +177,8 @@ export const blockSchemas: Record<string, BlockSchema> = {
     groups: ['General', 'SKU', 'Threat intel', 'DNS'],
     fields: [
       nameField, locationField,
+      { key: 'privateIpAddress', label: 'Planned private IP', type: 'text', group: 'General',
+        placeholder: '10.0.0.4', help: 'Required when a VNet route table sends traffic to this firewall by name.' },
       { key: 'sku', label: 'SKU tier', type: 'select', group: 'SKU', default: 'Standard',
         options: [{value:'Basic',label:'Basic (SMB, no IDPS)'},{value:'Standard',label:'Standard'},{value:'Premium',label:'Premium (IDPS, TLS inspection)'}] },
       { key: 'firewallPolicyId', label: 'Firewall Policy ID', type: 'text', group: 'General' },

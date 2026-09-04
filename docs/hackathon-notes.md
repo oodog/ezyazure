@@ -34,6 +34,8 @@ to "what exactly will this change add?"
 - Selects reviewed, versioned product skills for networking, compute, storage, databases, web,
   containers, AI, security, monitoring, AVS, and general architecture questions.
 - Opens Discovery results in **Design / Validate** as an immutable baseline.
+- Turns natural-language design requests into a reviewable plan of supported canvas resources,
+  containment, connections, and firewall routes; nothing is applied until the user approves it.
 - Separates existing resources from proposed additions and validates supported relationships and IP
   ranges.
 - Generates additions-only Bicep for supported changes and supports Azure what-if review.
@@ -50,9 +52,12 @@ Keep the main path to five or six minutes.
 5. Ask the assistant: "Why might this route be asymmetric, and what should I check next?"
 6. Point out the selected product skills and Microsoft Learn references.
 7. Open the discovered topology in **Design / Validate**.
-8. Add a supported endpoint, subnet, or relationship without changing the discovered baseline.
-9. Review validation findings and the additions-only change summary.
-10. Generate Bicep and explain that Azure what-if remains an approval gate before deployment.
+8. Ask AI design to add a subnet, storage account, and Private Endpoint, then review and apply the
+  proposed canvas actions without changing the discovered baseline.
+9. Ask it to route subnet traffic through a firewall IP and show the generated route-table
+  association or clarification request when required data is missing.
+10. Review validation findings and the additions-only change summary.
+11. Generate Bicep and explain that Azure what-if remains an approval gate before deployment.
 
 **Fallback:** if live Azure discovery is slow, use a previously discovered topology and continue from
 step 3. Keep screenshots of the topology, finding details, assistant response, delta summary, and
