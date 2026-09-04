@@ -87,6 +87,23 @@ describe('discovery technology filters', () => {
     expect(result.edges.map((item) => item.id)).toEqual(['subnet-vm'])
   })
 
+  it('keeps the VM to network interface to NSG association visible', () => {
+    const nodes = [
+      node('vm', 'Microsoft.Compute/virtualMachines'),
+      node('nic', 'Microsoft.Network/networkInterfaces'),
+      node('nsg', 'Microsoft.Network/networkSecurityGroups'),
+    ]
+    const edges: Edge[] = [
+      { id: 'vm-nic', source: 'vm', target: 'nic', data: { category: 'connectedTo' } },
+      { id: 'nic-nsg', source: 'nic', target: 'nsg', data: { category: 'connectedTo' } },
+    ]
+
+    const result = filterDiscoveryGraphByView(nodes, edges, 'network-compute', new Set())
+
+    expect(result.nodes.map((item) => item.id)).toEqual(['vm', 'nic', 'nsg'])
+    expect(result.edges.map((item) => item.id)).toEqual(['vm-nic', 'nic-nsg'])
+  })
+
   it('adds only PaaS workloads with a proven network attachment', () => {
     const nodes = [
       node('subnet', 'Microsoft.Network/virtualNetworks/subnets'),

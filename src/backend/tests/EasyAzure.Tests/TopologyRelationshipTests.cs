@@ -86,6 +86,50 @@ public class TopologyRelationshipTests
         Assert.Contains("expressRouteID", edge.Metadata?["propertyPath"]);
     }
 
+    [Fact]
+    public void BuildEdges_VmNetworkInterfaceAndNsg_CreatesCompleteAssociationChain()
+    {
+        var vmId = ResourceId("Microsoft.Compute/virtualMachines/vm-a");
+        var nicId = ResourceId("Microsoft.Network/networkInterfaces/vm-a-nic");
+        var nsgId = ResourceId("Microsoft.Network/networkSecurityGroups/vm-a-nsg");
+        var vm = Resource(
+            vmId,
+            "Microsoft.Compute/virtualMachines",
+            new Dictionary<string, object>
+            {
+                ["networkProfile"] = new Dictionary<string, object>
+                {
+                    ["networkInterfaces"] = new List<object>
+                    {
+                        new Dictionary<string, object> { ["id"] = nicId },
+                    },
+                },
+            });
+        var nic = Resource(
+            nicId,
+            "Microsoft.Network/networkInterfaces",
+            new Dictionary<string, object>
+            {
+                ["networkSecurityGroup"] = new Dictionary<string, object> { ["id"] = nsgId },
+            });
+        var resources = new List<AzureResource>
+        {
+            vm,
+            nic,
+            Resource(nsgId, "Microsoft.Network/networkSecurityGroups"),
+        };
+
+        var edges = TopologyService.BuildEdges(resources, [nic]);
+
+        var vmToNic = Assert.Single(edges, edge => edge.Source == vmId && edge.Target == nicId);
+        Assert.Equal(FlowEdgeCategory.ConnectedTo, vmToNic.Category);
+        Assert.Contains("networkInterfaces", vmToNic.Metadata?["propertyPath"]);
+
+        var nicToNsg = Assert.Single(edges, edge => edge.Source == nicId && edge.Target == nsgId);
+        Assert.Equal(FlowEdgeCategory.ConnectedTo, nicToNsg.Category);
+        Assert.Contains("networkSecurityGroup", nicToNsg.Metadata?["propertyPath"]);
+    }
+
     private static AzureResource Resource(
         string id,
         string type,

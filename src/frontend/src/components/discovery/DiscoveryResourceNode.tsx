@@ -16,6 +16,8 @@ function categorise(type: string): { label: string; accent: string } {
     return { label: 'VNet', accent: '#3b82f6' }
   if (t === 'microsoft.network/virtualnetworks/subnets')
     return { label: 'Subnet', accent: '#60a5fa' }
+  if (t === 'microsoft.network/networkinterfaces')
+    return { label: 'Network Interface', accent: '#65a30d' }
   if (t === 'microsoft.network/networksecuritygroups')
     return { label: 'NSG', accent: '#f43f5e' }
   if (t === 'microsoft.network/routetables')

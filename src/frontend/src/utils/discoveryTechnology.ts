@@ -31,6 +31,7 @@ const networkPathResourceTypes = new Set([
   'microsoft.network/loadbalancers',
   'microsoft.network/localnetworkgateways',
   'microsoft.network/natgateways',
+  'microsoft.network/networkinterfaces',
   'microsoft.network/networksecuritygroups',
   'microsoft.network/networkvirtualappliances',
   'microsoft.network/p2svpngateways',
