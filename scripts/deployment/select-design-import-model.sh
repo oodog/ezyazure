@@ -25,17 +25,23 @@ deployments=$(az cognitiveservices account deployment list \
   --query "[?properties.provisioningState=='Succeeded'].[name, properties.model.name]" \
   --output tsv 2>/dev/null || true)
 
-# Strongest vision + structured-output models first.
-for model in gpt-5.1 gpt-5 gpt-4.1 gpt-5-mini gpt-4o; do
-  name=$(awk -v m="$model" -F'\t' '$2 == m { print $1; exit }' <<<"$deployments")
-  if [ -n "$name" ]; then
-    case "$model" in
-      gpt-5*) reasoning=true ;;
-      *) reasoning=false ;;
-    esac
-    printf '%s\n%s\n' "$name" "$reasoning"
-    exit 0
-  fi
-done
+# Rank vision + structured-output capable models: full GPT-5.x, then GPT-4.1,
+# then GPT-5.x mini, then GPT-4o. Newer minor versions win within a tier.
+best=$(awk -F'\t' '
+  function minor(model) { return match(model, /^gpt-5\.[0-9]+/) ? substr(model, 7, RLENGTH - 6) + 0 : 0 }
+  {
+    model = tolower($2); score = 0
+    if (model ~ /^gpt-5(\.[0-9]+)?$/) score = 4000 + minor(model)
+    else if (model == "gpt-4.1") score = 3000
+    else if (model ~ /^gpt-5(\.[0-9]+)?-mini$/) score = 2000 + minor(model)
+    else if (model == "gpt-4o") score = 1000
+    if (score > top) { top = score; name = $1; reasoning = (model ~ /^gpt-5/) ? "true" : "false" }
+  }
+  END { if (top > 0) printf "%s\n%s\n", name, reasoning }
+' <<<"$deployments")
 
-printf '\n\n'
+if [ -n "$best" ]; then
+  printf '%s\n' "$best"
+else
+  printf '\n\n'
+fi
