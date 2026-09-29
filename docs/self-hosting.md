@@ -75,6 +75,25 @@ azd env set AZURE_OPENAI_DEPLOYMENT_NAME gpt-4o-mini
 azd up
 ```
 
+Design import (reading diagrams, PDFs, and draw.io files into the designer) needs a stronger vision
+model than `gpt-4o-mini` to reproduce nested structure reliably. Deploy `gpt-4.1` (fast, deterministic)
+or `gpt-5` (best accuracy, slower) on the same account and point import at it:
+
+```bash
+az cognitiveservices account deployment create \
+  --resource-group <resource-group> --name <resource-name> \
+  --deployment-name gpt-4.1 --model-name gpt-4.1 --model-version 2025-04-14 \
+  --model-format OpenAI --sku-name GlobalStandard --sku-capacity 50
+azd env set AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME gpt-4.1
+azd up
+```
+
+Deployments whose names start with `gpt-5` or `o<digit>` are called as reasoning models automatically
+(API version `2025-04-01-preview`, `max_completion_tokens`, no temperature). Override detection with
+`AzureOpenAI__DesignImportReasoningModel=true|false` and the API version with
+`AzureOpenAI__DesignImportApiVersion` when a deployment has a custom name. The GitHub infra workflow
+reads the same value from the `AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME` repository variable.
+
 When the resource is in the selected subscription, the Entra setup attempts to infer its resource
 ID from the endpoint. Setting `AZURE_OPENAI_RESOURCE_ID` explicitly is the most reliable option.
 Bicep grants the deployed API identity `Cognitive Services OpenAI User` on that account.

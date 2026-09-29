@@ -113,28 +113,96 @@ export function parseDrawioXml(xml: string): DesignImportHint[] {
   if (models.length === 0) throw new Error('No draw.io diagram was found in this file.')
 
   const hints: DesignImportHint[] = []
-  for (const model of models) {
-    for (const cell of Array.from(model.querySelectorAll('mxCell'))) {
-      const isShape = cell.getAttribute('vertex') === '1'
-      const isEdge = cell.getAttribute('edge') === '1'
-      if (!isShape && !isEdge) continue
-      const geometry = cell.querySelector('mxGeometry')
+  models.forEach((model, pageIndex) => {
+    // Page-prefix IDs so multi-page diagrams never collide.
+    const prefix = models.length > 1 ? `p${pageIndex + 1}:` : ''
+    const cells = collectCells(model)
+    const byId = new Map(cells.map((cell) => [cell.id, cell]))
+    const absolute = new Map<string, { x: number; y: number }>()
+    // draw.io stores child geometry relative to the parent group/container, so
+    // resolve absolute coordinates to keep the source layout intact.
+    const resolve = (id: string, depth = 0): { x: number; y: number } => {
+      const cached = absolute.get(id)
+      if (cached) return cached
+      const cell = byId.get(id)
+      if (!cell || depth > 50) return { x: 0, y: 0 }
+      const parent = cell.parentId && byId.get(cell.parentId)?.isShape
+        ? resolve(cell.parentId, depth + 1)
+        : { x: 0, y: 0 }
+      const point = cell.isEdge ? { x: cell.x, y: cell.y } : { x: parent.x + cell.x, y: parent.y + cell.y }
+      absolute.set(id, point)
+      return point
+    }
+
+    for (const cell of cells) {
+      if (!cell.isShape && !cell.isEdge) continue
+      const point = resolve(cell.id)
+      const parent = cell.parentId ? byId.get(cell.parentId) : undefined
       hints.push({
-        id: cell.getAttribute('id') ?? `element-${hints.length + 1}`,
-        label: cleanLabel(cell.getAttribute('value') ?? ''),
-        style: trimText(cell.getAttribute('style') ?? '', 2_000),
-        kind: isEdge ? 'edge' : 'shape',
-        x: numberAttribute(geometry, 'x'),
-        y: numberAttribute(geometry, 'y'),
-        width: numberAttribute(geometry, 'width'),
-        height: numberAttribute(geometry, 'height'),
-        parentId: cell.getAttribute('parent') ?? undefined,
-        sourceId: cell.getAttribute('source') ?? undefined,
-        targetId: cell.getAttribute('target') ?? undefined,
+        id: `${prefix}${cell.id}`,
+        label: cell.label,
+        style: trimText(cell.style, 2_000),
+        kind: cell.isEdge ? 'edge' : 'shape',
+        x: Math.round(point.x),
+        y: Math.round(point.y),
+        width: Math.round(cell.width),
+        height: Math.round(cell.height),
+        parentId: parent?.isShape ? `${prefix}${parent.id}` : undefined,
+        sourceId: cell.sourceId ? `${prefix}${cell.sourceId}` : undefined,
+        targetId: cell.targetId ? `${prefix}${cell.targetId}` : undefined,
       })
     }
+  })
+  // Shapes carry the structure; keep them ahead of edges when truncating.
+  return [
+    ...hints.filter((hint) => hint.kind === 'shape'),
+    ...hints.filter((hint) => hint.kind === 'edge'),
+  ].slice(0, 400)
+}
+
+interface DrawioCell {
+  id: string
+  label: string
+  style: string
+  isShape: boolean
+  isEdge: boolean
+  x: number
+  y: number
+  width: number
+  height: number
+  parentId?: string
+  sourceId?: string
+  targetId?: string
+}
+
+function collectCells(model: Element): DrawioCell[] {
+  const cells: DrawioCell[] = []
+  let generated = 0
+  for (const cell of Array.from(model.querySelectorAll('mxCell'))) {
+    // Shapes with custom properties or links are wrapped in <object>/<UserObject>,
+    // which owns the id and label instead of the inner mxCell.
+    const wrapper = cell.parentElement && ['object', 'UserObject'].includes(cell.parentElement.tagName)
+      ? cell.parentElement
+      : null
+    const geometry = Array.from(cell.children).find((child) => child.tagName === 'mxGeometry') ?? null
+    const rawLabel = wrapper?.getAttribute('label') ?? cell.getAttribute('value') ?? ''
+    const tooltip = wrapper?.getAttribute('tooltip') ?? ''
+    cells.push({
+      id: wrapper?.getAttribute('id') ?? cell.getAttribute('id') ?? `element-${++generated}`,
+      label: cleanLabel([rawLabel, tooltip].filter(Boolean).join(' - ')),
+      style: cell.getAttribute('style') ?? '',
+      isShape: cell.getAttribute('vertex') === '1',
+      isEdge: cell.getAttribute('edge') === '1',
+      x: numberAttribute(geometry, 'x'),
+      y: numberAttribute(geometry, 'y'),
+      width: numberAttribute(geometry, 'width'),
+      height: numberAttribute(geometry, 'height'),
+      parentId: cell.getAttribute('parent') ?? undefined,
+      sourceId: cell.getAttribute('source') ?? undefined,
+      targetId: cell.getAttribute('target') ?? undefined,
+    })
   }
-  return hints.slice(0, 400)
+  return cells
 }
 
 function extractGraphModel(diagram: Element, parser: DOMParser): Element {

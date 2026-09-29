@@ -137,7 +137,10 @@ Operational limits:
 
 The API uses `AzureOpenAI__Endpoint`, `AzureOpenAI__DeploymentName`, and
 `AzureOpenAI__ApiVersion`. The deployment must support vision and structured
-outputs; staging uses `gpt-4o-mini` with API version `2024-10-21`. Grant the API
+outputs; staging uses `gpt-4o-mini` with API version `2024-10-21`. Set
+`AzureOpenAI__DesignImportDeploymentName` to a stronger vision deployment such as
+`gpt-4.1` or `gpt-5` for more faithful diagram import (see
+[self-hosting](self-hosting.md#optional-azure-openai)). Grant the API
 managed identity **Cognitive Services OpenAI User** on the Azure OpenAI account.
 No Azure OpenAI key is required when managed identity is configured.
 

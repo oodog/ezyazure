@@ -29,6 +29,9 @@
     "azureOpenAIDeploymentName": {
       "value": "${AZURE_OPENAI_DEPLOYMENT_NAME}"
     },
+    "azureOpenAIDesignImportDeploymentName": {
+      "value": "${AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME}"
+    },
     "discoveryReaderRoleAssignmentName": {
       "value": "${EASYAZURE_DISCOVERY_READER_ROLE_ASSIGNMENT_NAME}"
     },

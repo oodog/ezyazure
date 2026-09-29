@@ -36,6 +36,8 @@ export interface DesignImportNode {
   label: string
   x: number
   y: number
+  width?: number
+  height?: number
   parentId?: string | null
   confidence: number
   evidence: string

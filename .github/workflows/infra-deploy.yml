@@ -91,6 +91,7 @@ jobs:
               apiContainerImage=${{ secrets.ACR_NAME }}.azurecr.io/easyazure-api:latest \
               azureOpenAIEndpoint=$AZURE_OPENAI_ENDPOINT \
               azureOpenAIResourceId=$AZURE_OPENAI_RESOURCE_ID \
+              azureOpenAIDesignImportDeploymentName="${{ vars.AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME }}" \
               adminObjectId=$EASYAZURE_ADMIN_OBJECT_ID \
               adminPrincipalType=ServicePrincipal \
               discoveryReaderRoleAssignmentName=$EASYAZURE_DISCOVERY_READER_ROLE_ASSIGNMENT_NAME \
@@ -169,6 +170,7 @@ jobs:
               apiContainerImage=${{ secrets.ACR_NAME }}.azurecr.io/easyazure-api:latest \
               azureOpenAIEndpoint=$AZURE_OPENAI_ENDPOINT \
               azureOpenAIResourceId=$AZURE_OPENAI_RESOURCE_ID \
+              azureOpenAIDesignImportDeploymentName="${{ vars.AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME }}" \
               adminObjectId=$EASYAZURE_ADMIN_OBJECT_ID \
               adminPrincipalType=ServicePrincipal \
               discoveryReaderRoleAssignmentName=$EASYAZURE_DISCOVERY_READER_ROLE_ASSIGNMENT_NAME \

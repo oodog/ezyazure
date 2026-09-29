@@ -78,6 +78,8 @@ public record DesignImportNode
     public required string Label { get; init; }
     public double X { get; init; }
     public double Y { get; init; }
+    public double Width { get; init; }
+    public double Height { get; init; }
     public string? ParentId { get; init; }
     public double Confidence { get; init; }
     public string Evidence { get; init; } = string.Empty;

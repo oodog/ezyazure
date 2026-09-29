@@ -19,7 +19,7 @@ const proposal: DesignImportProposal = {
 }
 
 describe('applyDesignImport', () => {
-  it('creates valid containment and filters unsupported edge directions', () => {
+  it('creates valid containment and repairs reversed edge directions', () => {
     const result = applyDesignImport(
       proposal,
       new Set(proposal.nodes.map((node) => node.id)),
@@ -36,7 +36,39 @@ describe('applyDesignImport', () => {
     expect(subnet?.data.properties.addressPrefix).toBe('10.20.1.0/24')
     expect(result.edges).toHaveLength(1)
     expect(result.edges[0].label).toBe('protects')
-    expect(result.warnings).toContainEqual(expect.stringContaining('Subnet has no defined outgoing connections'))
+    expect(result.edges[0].source).toBe('import-test-nsg')
+    expect(result.warnings).toEqual([])
+  })
+
+  it('grows containers to fit children and scales small source icons', () => {
+    const nested: DesignImportProposal = {
+      ...proposal,
+      nodes: [
+        { id: 'vnet', blockType: 'VNet', label: 'Hub', x: 0, y: 0, width: 200, height: 120, confidence: 1, evidence: '', properties: {} },
+        { id: 'subnet', blockType: 'Subnet', label: 'App', x: 20, y: 30, width: 160, height: 80, parentId: 'vnet', confidence: 1, evidence: '', properties: {} },
+        { id: 'vm1', blockType: 'VM', label: 'vm1', x: 30, y: 50, width: 50, height: 50, parentId: 'subnet', confidence: 1, evidence: '', properties: {} },
+        { id: 'vm2', blockType: 'VM', label: 'vm2', x: 110, y: 50, width: 50, height: 50, parentId: 'subnet', confidence: 1, evidence: '', properties: {} },
+      ],
+      edges: [
+        { id: 'contains', source: 'vnet', target: 'subnet', relationship: 'contains', confidence: 1, evidence: '' },
+      ],
+    }
+
+    const result = applyDesignImport(nested, new Set(nested.nodes.map((node) => node.id)), [], [], 'replace', 't')
+    const byId = new Map(result.nodes.map((node) => [node.id, node]))
+    const vm1 = byId.get('import-t-vm1')!
+    const vm2 = byId.get('import-t-vm2')!
+    const subnet = byId.get('import-t-subnet')!
+    const vnet = byId.get('import-t-vnet')!
+
+    // Leaf cards must not overlap after scaling.
+    expect(vm2.position.x - vm1.position.x).toBeGreaterThanOrEqual(176)
+    expect(subnet.style?.width).toBeGreaterThanOrEqual(vm2.position.x + 176)
+    expect(vnet.style?.width).toBeGreaterThanOrEqual(subnet.position.x + (subnet.style?.width as number))
+    expect(vnet.style?.height).toBeGreaterThanOrEqual(subnet.position.y + (subnet.style?.height as number))
+    // Containment connectors are represented by nesting, not by an edge or warning.
+    expect(result.edges).toHaveLength(0)
+    expect(result.warnings).toEqual([])
   })
 
   it('merges selected nodes to the right of existing content', () => {
