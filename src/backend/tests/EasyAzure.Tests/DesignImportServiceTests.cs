@@ -107,6 +107,10 @@ public class DesignImportServiceTests
     [InlineData("gpt-5-mini", null, true)]
     [InlineData("gpt-5-chat", null, false)]
     [InlineData("o4-mini", null, true)]
+    [InlineData("gpt-5.6-luna", null, true)]
+    [InlineData("gpt-6-luna", null, true)]
+    [InlineData("gpt-6-astra", null, true)]
+    [InlineData("gpt-6-chat", null, false)]
     [InlineData("design-import", "true", true)]
     [InlineData("gpt-5", "false", false)]
     public void IsReasoningDeployment_DetectsModelFamilyWithOverride(string deployment, string? configured, bool expected)

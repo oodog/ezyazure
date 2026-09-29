@@ -25,17 +25,22 @@ deployments=$(az cognitiveservices account deployment list \
   --query "[?properties.provisioningState=='Succeeded'].[name, properties.model.name]" \
   --output tsv 2>/dev/null || true)
 
-# Rank vision + structured-output capable models: full GPT-5.x, then GPT-4.1,
-# then GPT-5.x mini, then GPT-4o. Newer minor versions win within a tier.
+# Rank vision + structured-output capable models: newer generations first,
+# and within a generation the full tier (astra > sol > terra/plain) ahead of
+# the budget tier (mini/luna). Nano, chat and other variants are ignored.
 best=$(awk -F'\t' '
-  function minor(model) { return match(model, /^gpt-5\.[0-9]+/) ? substr(model, 7, RLENGTH - 6) + 0 : 0 }
   {
-    model = tolower($2); score = 0
-    if (model ~ /^gpt-5(\.[0-9]+)?$/) score = 4000 + minor(model)
-    else if (model == "gpt-4.1") score = 3000
-    else if (model ~ /^gpt-5(\.[0-9]+)?-mini$/) score = 2000 + minor(model)
-    else if (model == "gpt-4o") score = 1000
-    if (score > top) { top = score; name = $1; reasoning = (model ~ /^gpt-5/) ? "true" : "false" }
+    model = tolower($2); score = 0; generation = 0
+    if (model == "gpt-4o") score = 450
+    else if (match(model, /^gpt-[0-9]+(\.[0-9]+)?/)) {
+      generation = substr(model, 5, RLENGTH - 4) + 0
+      tier = substr(model, RLENGTH + 1)
+      if (tier == "-astra") score = generation * 100 + 53
+      else if (tier == "-sol") score = generation * 100 + 52
+      else if (tier == "" || tier == "-terra") score = generation * 100 + 51
+      else if (tier == "-mini" || tier == "-luna") score = generation * 100 + 10
+    }
+    if (score > top) { top = score; name = $1; reasoning = (generation >= 5) ? "true" : "false" }
   }
   END { if (top > 0) printf "%s\n%s\n", name, reasoning }
 ' <<<"$deployments")

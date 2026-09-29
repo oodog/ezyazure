@@ -88,16 +88,17 @@ azd env set AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME gpt-4.1
 azd up
 ```
 
-Deployments whose names start with `gpt-5` or `o<digit>` are called as reasoning models automatically
-(API version `2025-04-01-preview`, `max_completion_tokens`, no temperature). Override detection with
+Deployments whose names start with `gpt-5`, `gpt-6` (or later) or `o<digit>` are called as reasoning
+models automatically through the versionless Azure OpenAI v1 API (`/openai/v1/chat/completions`,
+`max_completion_tokens`, no temperature). Override detection with
 `AzureOpenAI__DesignImportReasoningModel=true|false` and the API version with
 `AzureOpenAI__DesignImportApiVersion` when a deployment has a custom name. The GitHub infra workflow
 uses the `AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME` repository variable when set; otherwise it
-picks the strongest deployment already on the discovered account (newest full `gpt-5.x`, then
-`gpt-4.1`, newest `gpt-5.x-mini`, then `gpt-4o`) and falls back to `AZURE_OPENAI_DEPLOYMENT_NAME`
-when none exists.
+picks the strongest deployment already on the discovered account: the newest generation wins
+(`gpt-6-*` over `gpt-5.x`), and within a generation the full tier (`astra`, `sol`, `terra` or plain)
+beats the budget tier (`mini`, `luna`). It falls back to `AZURE_OPENAI_DEPLOYMENT_NAME` when none exists.
 
-For the lowest cost, deploy only a `gpt-5.x-mini` model (for example `gpt-5-mini`). Global Standard
+For the lowest cost, deploy only a budget-tier model such as `gpt-6-luna` or `gpt-5-mini`. Global Standard
 deployments are billed per token with no idle charge, and a typical diagram import costs a few cents.
 
 When the resource is in the selected subscription, the Entra setup attempts to infer its resource

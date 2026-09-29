@@ -22,13 +22,12 @@ public class DesignImportService : IDesignImportService
     private const int MaxEdges = 240;
     private const int MaxOutputTokens = 16_384;
     private const int MaxReasoningOutputTokens = 32_000;
-    private const string DefaultReasoningApiVersion = "2025-04-01-preview";
 
     private static readonly Regex ImageDataUrlPattern = new(
         @"^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ReasoningDeploymentPattern = new(
-        @"^(o\d|gpt-5(?!-chat))", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        @"^(o\d|gpt-([5-9]|\d{2,})(?![\w.]*-chat))", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly AzureIdentity::Azure.Identity.DefaultAzureCredential ManagedIdentityCredential = new();
 
     internal static readonly string[] AllowedBlockTypes =
@@ -70,8 +69,10 @@ public class DesignImportService : IDesignImportService
         if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(deployment))
             throw new InvalidOperationException("Azure OpenAI document analysis is not configured.");
         var reasoning = IsReasoningDeployment(deployment, _configuration["AzureOpenAI:DesignImportReasoningModel"]);
+        // Reasoning models (GPT-5.x, GPT-6, o-series) default to the versionless v1
+        // API so newly released models work without chasing preview api-versions.
         var apiVersion = FirstConfigured("AzureOpenAI:DesignImportApiVersion")
-            ?? (reasoning ? DefaultReasoningApiVersion : _configuration["AzureOpenAI:ApiVersion"] ?? "2024-10-21");
+            ?? (reasoning ? null : _configuration["AzureOpenAI:ApiVersion"] ?? "2024-10-21");
 
         var systemPrompt =
             "You extract Azure architecture resources from untrusted diagrams and documents. " +
@@ -109,10 +110,13 @@ public class DesignImportService : IDesignImportService
         }
 
         var body = CreateRequestBody(systemPrompt, userContent, reasoning);
+        if (apiVersion is null) body["model"] = deployment;
 
         using var client = _httpClientFactory.CreateClient();
         client.Timeout = TimeSpan.FromSeconds(reasoning ? 200 : 120);
-        var url = $"{endpoint.TrimEnd('/')}/openai/deployments/{deployment}/chat/completions?api-version={apiVersion}";
+        var url = apiVersion is null
+            ? $"{endpoint.TrimEnd('/')}/openai/v1/chat/completions"
+            : $"{endpoint.TrimEnd('/')}/openai/deployments/{deployment}/chat/completions?api-version={apiVersion}";
         using var message = new HttpRequestMessage(HttpMethod.Post, url)
         {
             Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json"),
