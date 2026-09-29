@@ -50,6 +50,9 @@ jobs:
           OPENAI_ENDPOINT=$(az cognitiveservices account list \
             --resource-group "${{ secrets.AZURE_RG_STAGING }}" \
             --query "[?kind=='OpenAI'] | [0].properties.endpoint" --output tsv 2>/dev/null || true)
+          mapfile -t DESIGN_IMPORT < <(bash scripts/deployment/select-design-import-model.sh \
+            "$OPENAI_RESOURCE_ID" "${{ vars.AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME }}")
+          echo "Design import deployment: ${DESIGN_IMPORT[0]:-<default deployment>}"
           API_PRINCIPAL_ID=$(az identity show \
             --name "id-ca-easyazure-${AZURE_ENV_NAME}-api" \
             --resource-group "$AZURE_RG" \
@@ -74,6 +77,8 @@ jobs:
           echo "EASYAZURE_ADMIN_OBJECT_ID=$ADMIN_OBJECT_ID" >> "$GITHUB_ENV"
           echo "AZURE_OPENAI_RESOURCE_ID=$OPENAI_RESOURCE_ID" >> "$GITHUB_ENV"
           echo "AZURE_OPENAI_ENDPOINT=$OPENAI_ENDPOINT" >> "$GITHUB_ENV"
+          echo "AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME=${DESIGN_IMPORT[0]:-}" >> "$GITHUB_ENV"
+          echo "AZURE_OPENAI_DESIGN_IMPORT_REASONING=${DESIGN_IMPORT[1]:-}" >> "$GITHUB_ENV"
           echo "EASYAZURE_DISCOVERY_READER_ROLE_ASSIGNMENT_NAME=${DISCOVERY_READER_ASSIGNMENT_NAME:-}" >> "$GITHUB_ENV"
           echo "EASYAZURE_STORAGE_BLOB_ROLE_ASSIGNMENT_NAME=${STORAGE_BLOB_ASSIGNMENT_NAME:-}" >> "$GITHUB_ENV"
           echo "EASYAZURE_OPENAI_USER_ROLE_ASSIGNMENT_NAME=${OPENAI_USER_ASSIGNMENT_NAME:-}" >> "$GITHUB_ENV"
@@ -91,7 +96,8 @@ jobs:
               apiContainerImage=${{ secrets.ACR_NAME }}.azurecr.io/easyazure-api:latest \
               azureOpenAIEndpoint=$AZURE_OPENAI_ENDPOINT \
               azureOpenAIResourceId=$AZURE_OPENAI_RESOURCE_ID \
-              azureOpenAIDesignImportDeploymentName="${{ vars.AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME }}" \
+              azureOpenAIDesignImportDeploymentName="$AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME" \
+              azureOpenAIDesignImportReasoningModel="$AZURE_OPENAI_DESIGN_IMPORT_REASONING" \
               adminObjectId=$EASYAZURE_ADMIN_OBJECT_ID \
               adminPrincipalType=ServicePrincipal \
               discoveryReaderRoleAssignmentName=$EASYAZURE_DISCOVERY_READER_ROLE_ASSIGNMENT_NAME \
@@ -129,6 +135,9 @@ jobs:
           OPENAI_ENDPOINT=$(az cognitiveservices account list \
             --resource-group "${{ secrets.AZURE_RG_STAGING }}" \
             --query "[?kind=='OpenAI'] | [0].properties.endpoint" --output tsv 2>/dev/null || true)
+          mapfile -t DESIGN_IMPORT < <(bash scripts/deployment/select-design-import-model.sh \
+            "$OPENAI_RESOURCE_ID" "${{ vars.AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME }}")
+          echo "Design import deployment: ${DESIGN_IMPORT[0]:-<default deployment>}"
           API_PRINCIPAL_ID=$(az identity show \
             --name "id-ca-easyazure-${AZURE_ENV_NAME}-api" \
             --resource-group "$AZURE_RG" \
@@ -153,6 +162,8 @@ jobs:
           echo "EASYAZURE_ADMIN_OBJECT_ID=$ADMIN_OBJECT_ID" >> "$GITHUB_ENV"
           echo "AZURE_OPENAI_RESOURCE_ID=$OPENAI_RESOURCE_ID" >> "$GITHUB_ENV"
           echo "AZURE_OPENAI_ENDPOINT=$OPENAI_ENDPOINT" >> "$GITHUB_ENV"
+          echo "AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME=${DESIGN_IMPORT[0]:-}" >> "$GITHUB_ENV"
+          echo "AZURE_OPENAI_DESIGN_IMPORT_REASONING=${DESIGN_IMPORT[1]:-}" >> "$GITHUB_ENV"
           echo "EASYAZURE_DISCOVERY_READER_ROLE_ASSIGNMENT_NAME=${DISCOVERY_READER_ASSIGNMENT_NAME:-}" >> "$GITHUB_ENV"
           echo "EASYAZURE_STORAGE_BLOB_ROLE_ASSIGNMENT_NAME=${STORAGE_BLOB_ASSIGNMENT_NAME:-}" >> "$GITHUB_ENV"
           echo "EASYAZURE_OPENAI_USER_ROLE_ASSIGNMENT_NAME=${OPENAI_USER_ASSIGNMENT_NAME:-}" >> "$GITHUB_ENV"
@@ -170,7 +181,8 @@ jobs:
               apiContainerImage=${{ secrets.ACR_NAME }}.azurecr.io/easyazure-api:latest \
               azureOpenAIEndpoint=$AZURE_OPENAI_ENDPOINT \
               azureOpenAIResourceId=$AZURE_OPENAI_RESOURCE_ID \
-              azureOpenAIDesignImportDeploymentName="${{ vars.AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME }}" \
+              azureOpenAIDesignImportDeploymentName="$AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME" \
+              azureOpenAIDesignImportReasoningModel="$AZURE_OPENAI_DESIGN_IMPORT_REASONING" \
               adminObjectId=$EASYAZURE_ADMIN_OBJECT_ID \
               adminPrincipalType=ServicePrincipal \
               discoveryReaderRoleAssignmentName=$EASYAZURE_DISCOVERY_READER_ROLE_ASSIGNMENT_NAME \

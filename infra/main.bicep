@@ -32,6 +32,10 @@ param azureOpenAIDeploymentName string = 'gpt-4o-mini'
 @description('Optional stronger vision deployment used only for design import (for example gpt-4.1 or gpt-5). Empty uses azureOpenAIDeploymentName.')
 param azureOpenAIDesignImportDeploymentName string = ''
 
+@description('Whether the design import deployment is a reasoning model (true/false). Empty infers it from the deployment name.')
+@allowed(['', 'true', 'false'])
+param azureOpenAIDesignImportReasoningModel string = ''
+
 @description('Azure OpenAI inference API version.')
 param azureOpenAIApiVersion string = '2024-10-21'
 
@@ -261,6 +265,7 @@ module apiApp 'modules/container-apps.bicep' = {
       { name: 'AzureOpenAI__DeploymentName', value: azureOpenAIDeploymentName }
       { name: 'AzureOpenAI__ApiVersion', value: azureOpenAIApiVersion }
       { name: 'AzureOpenAI__DesignImportDeploymentName', value: azureOpenAIDesignImportDeploymentName }
+      { name: 'AzureOpenAI__DesignImportReasoningModel', value: azureOpenAIDesignImportReasoningModel }
     ]
     tags: union(baseTags, {
       'azd-service-name': 'api'

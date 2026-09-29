@@ -92,7 +92,9 @@ Deployments whose names start with `gpt-5` or `o<digit>` are called as reasoning
 (API version `2025-04-01-preview`, `max_completion_tokens`, no temperature). Override detection with
 `AzureOpenAI__DesignImportReasoningModel=true|false` and the API version with
 `AzureOpenAI__DesignImportApiVersion` when a deployment has a custom name. The GitHub infra workflow
-reads the same value from the `AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME` repository variable.
+uses the `AZURE_OPENAI_DESIGN_IMPORT_DEPLOYMENT_NAME` repository variable when set; otherwise it
+picks the strongest deployment already on the discovered account (`gpt-5.1`, `gpt-5`, `gpt-4.1`,
+`gpt-5-mini`, then `gpt-4o`) and falls back to `AZURE_OPENAI_DEPLOYMENT_NAME` when none exists.
 
 When the resource is in the selected subscription, the Entra setup attempts to infer its resource
 ID from the endpoint. Setting `AZURE_OPENAI_RESOURCE_ID` explicitly is the most reliable option.
